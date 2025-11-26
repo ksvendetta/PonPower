@@ -1,0 +1,116 @@
+{
+  "Label": {
+    "tester": "kl131s",
+    "wireCenterClli": "LKGNWI01",
+    "cfas": "A02VJPG",
+    "aLoc": "LKGNWI01",
+    "zLoc": "LKGNWI01",
+    "dateTested": "2025-11-13",
+    "model": "PM-1v2-2X-VFL",
+    "serialNumber": "1406971",
+    "version": "1.0",
+    "calibrationDate": "0001-01-01",
+    "strandPowerThreshold": -24,
+    "cableId": "PON915B",
+    "Tested": [
+      {
+        "strand": 418,
+        "passFail": "pass",
+        "linkMeasurements": [
+          {
+            "wavelength": 1310,
+            "totalLoss": 0
+          },
+          {
+            "wavelength": 1550,
+            "totalLoss": -15.88
+          }
+        ]
+      },
+      {
+        "strand": 329,
+        "passFail": "pass",
+        "linkMeasurements": [
+          {
+            "wavelength": 1310,
+            "totalLoss": 0
+          },
+          {
+            "wavelength": 1550,
+            "totalLoss": -16.27
+          }
+        ]
+      },
+      {
+        "strand": 328,
+        "passFail": "pass",
+        "linkMeasurements": [
+          {
+            "wavelength": 1310,
+            "totalLoss": 0
+          },
+          {
+            "wavelength": 1550,
+            "totalLoss": -16.23
+          }
+        ]
+      },
+      {
+        "strand": 412,
+        "passFail": "pass",
+        "linkMeasurements": [
+          {
+            "wavelength": 1310,
+            "totalLoss": 0
+          },
+          {
+            "wavelength": 1550,
+            "totalLoss": -15.73
+          }
+        ]
+      },
+      {
+        "strand": 416,
+        "passFail": "pass",
+        "linkMeasurements": [
+          {
+            "wavelength": 1310,
+            "totalLoss": 0
+          },
+          {
+            "wavelength": 1550,
+            "totalLoss": -15.72
+          }
+        ]
+      },
+      {
+        "strand": 410,
+        "passFail": "pass",
+        "linkMeasurements": [
+          {
+            "wavelength": 1310,
+            "totalLoss": 0
+          },
+          {
+            "wavelength": 1550,
+            "totalLoss": -15.91
+          }
+        ]
+      },
+      {
+        "strand": 326,
+        "passFail": "pass",
+        "linkMeasurements": [
+          {
+            "wavelength": 1310,
+            "totalLoss": 0
+          },
+          {
+            "wavelength": 1550,
+            "totalLoss": -16.13
+          }
+        ]
+      }
+    ]
+  }
+}
