@@ -32,10 +32,10 @@ export interface LinkMeasurement {
 const DEFAULT_TEMPLATE: JsonTemplate = {
   Label: {
     tester: "kl131s",
-    wireCenterClli: "LKGNWI01",
-    cfas: "A02VJPG",
-    aLoc: "LKGNWI01",
-    zLoc: "LKGNWI01",
+    wireCenterClli: "",
+    cfas: "",
+    aLoc: "",
+    zLoc: "",
     dateTested: new Date().toISOString().split('T')[0],
     model: "PM-1v2-2X-VFL",
     serialNumber: "1406971",
@@ -47,7 +47,7 @@ const DEFAULT_TEMPLATE: JsonTemplate = {
   }
 };
 
-export async function parseExcelFile(file: File): Promise<{ cableId: string | null; strands: number[] }> {
+export async function parseExcelFile(file: File): Promise<{ cableId: string | null; strands: number[], cfas: string | null }> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -59,8 +59,36 @@ export async function parseExcelFile(file: File): Promise<{ cableId: string | nu
         const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
 
         if (jsonData.length === 0) {
-          resolve({ cableId: null, strands: [] });
+          resolve({ cableId: null, strands: [], cfas: null });
           return;
+        }
+        
+        // ---------------------------------------------------------
+        // Look for CFAS in range X2:AM4 (Indices: Rows 1-3, Cols 23-38)
+        // ---------------------------------------------------------
+        let foundCfas: string | null = null;
+        console.log("Searching for CFAS in range X2:AM4");
+        
+        // Row loop: 1 to 3 (indices 1-3, which is rows 2-4 in 1-based Excel)
+        for (let r = 1; r <= 3; r++) {
+           if (jsonData.length <= r) break;
+           const row = jsonData[r];
+           if (!row) continue;
+           
+           // Col loop: 23 to 38 (Cols X to AM)
+           for (let c = 23; c <= 38; c++) {
+              if (row.length <= c) break;
+              const cell = row[c];
+              if (typeof cell === 'string' && cell.trim().length > 0) {
+                 // Found a non-empty string in the target area
+                 // Heuristic: CFAS usually looks like an alphanumeric code, often starting with 'A' or similar
+                 // Let's take the first non-empty string we find in this block
+                 foundCfas = cell.trim();
+                 console.log(`Found CFAS candidate at [${r}, ${c}]: ${foundCfas}`);
+                 break;
+              }
+           }
+           if (foundCfas) break;
         }
 
         // ---------------------------------------------------------
@@ -171,8 +199,8 @@ export async function parseExcelFile(file: File): Promise<{ cableId: string | nu
            }
 
            const uniqueStrands = Array.from(new Set(strands)).sort((a, b) => a - b);
-           console.log(`Priority Extraction complete. CableID: ${foundCableId}, Strands: ${uniqueStrands.length}`);
-           resolve({ cableId: foundCableId, strands: uniqueStrands });
+           console.log(`Priority Extraction complete. CableID: ${foundCableId}, Strands: ${uniqueStrands.length}, CFAS: ${foundCfas}`);
+           resolve({ cableId: foundCableId, strands: uniqueStrands, cfas: foundCfas });
            return;
         }
 
@@ -290,8 +318,8 @@ export async function parseExcelFile(file: File): Promise<{ cableId: string | nu
         // Deduplicate strands and sort
         const uniqueStrands = Array.from(new Set(strands)).sort((a, b) => a - b);
         
-        console.log(`Extraction complete. CableID: ${foundCableId}, Strands: ${uniqueStrands.length}`);
-        resolve({ cableId: foundCableId, strands: uniqueStrands });
+        console.log(`Extraction complete. CableID: ${foundCableId}, Strands: ${uniqueStrands.length}, CFAS: ${foundCfas}`);
+        resolve({ cableId: foundCableId, strands: uniqueStrands, cfas: foundCfas });
 
       } catch (err) {
         console.error("Excel parsing error:", err);
@@ -307,11 +335,17 @@ export function generateReport(
   cableId: string,
   strands: number[],
   averageLoss: number,
+  wireCenterClli: string,
+  cfas: string,
   baseTemplate: JsonTemplate = DEFAULT_TEMPLATE
 ): JsonTemplate {
   const newReport = JSON.parse(JSON.stringify(baseTemplate)); // Deep copy
   newReport.Label.cableId = cableId;
   newReport.Label.dateTested = new Date().toISOString().split('T')[0];
+  newReport.Label.wireCenterClli = wireCenterClli;
+  newReport.Label.cfas = cfas;
+  newReport.Label.aLoc = wireCenterClli ? `${wireCenterClli}PFP` : "";
+  newReport.Label.zLoc = wireCenterClli ? `${wireCenterClli}PFP` : "";
 
   newReport.Label.Tested = strands.map(strand => {
     // Randomize loss: average +/- 0.5

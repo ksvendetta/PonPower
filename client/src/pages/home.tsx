@@ -13,6 +13,8 @@ export default function Home() {
   const { toast } = useToast();
   const [file, setFile] = useState<File | null>(null);
   const [cableId, setCableId] = useState<string>("");
+  const [wireCenterClli, setWireCenterClli] = useState<string>("");
+  const [cfas, setCfas] = useState<string>("");
   const [strands, setStrands] = useState<number[]>([]);
   const [averageLoss, setAverageLoss] = useState<string>("-15.5");
   const [jsonOutput, setJsonOutput] = useState<string>("");
@@ -25,6 +27,7 @@ export default function Home() {
       parseExcelFile(file)
         .then((data) => {
           if (data.cableId) setCableId(data.cableId);
+          if (data.cfas) setCfas(data.cfas);
           if (data.strands.length > 0) {
             setStrands(data.strands);
             toast({
@@ -56,11 +59,11 @@ export default function Home() {
     if (strands.length > 0) {
       const loss = parseFloat(averageLoss);
       if (!isNaN(loss)) {
-        const report = generateReport(cableId, strands, loss);
+        const report = generateReport(cableId, strands, loss, wireCenterClli, cfas);
         setJsonOutput(JSON.stringify(report, null, 2));
       }
     }
-  }, [cableId, strands, averageLoss]);
+  }, [cableId, strands, averageLoss, wireCenterClli, cfas]);
 
   const handleDownload = () => {
     try {
@@ -150,35 +153,62 @@ export default function Home() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="cableId">Cable ID</Label>
-                  <Input 
-                    id="cableId" 
-                    value={cableId} 
-                    onChange={(e) => setCableId(e.target.value)}
-                    placeholder="Extracted from Excel..."
-                    className="font-mono bg-secondary/20 border-border focus:border-primary"
-                  />
-                </div>
-                
-                <div className="space-y-2">
-                  <Label htmlFor="avgLoss">Target Average Loss (dB)</Label>
-                  <div className="relative">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2 col-span-2">
+                    <Label htmlFor="cableId">Cable ID</Label>
                     <Input 
-                      id="avgLoss" 
-                      type="number" 
-                      step="0.1"
-                      value={averageLoss} 
-                      onChange={(e) => setAverageLoss(e.target.value)}
-                      className="font-mono bg-secondary/20 border-border focus:border-primary pr-12"
+                      id="cableId" 
+                      value={cableId} 
+                      onChange={(e) => setCableId(e.target.value)}
+                      placeholder="Extracted from Excel..."
+                      className="font-mono bg-secondary/20 border-border focus:border-primary"
                     />
-                    <div className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm font-mono">
-                      dB
-                    </div>
                   </div>
-                  <p className="text-xs text-muted-foreground">
-                    Values will be randomized ±0.5 dB from this average.
-                  </p>
+
+                  <div className="space-y-2 col-span-2">
+                    <Label htmlFor="wireCenterClli">Wire Center CLLI</Label>
+                    <Input 
+                      id="wireCenterClli" 
+                      value={wireCenterClli} 
+                      onChange={(e) => setWireCenterClli(e.target.value)}
+                      placeholder="e.g. LKGNWI01"
+                      className="font-mono bg-secondary/20 border-border focus:border-primary"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Automatically updates aLoc/zLoc with PFP suffix.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2 col-span-2">
+                    <Label htmlFor="cfas">CFAS</Label>
+                    <Input 
+                      id="cfas" 
+                      value={cfas} 
+                      onChange={(e) => setCfas(e.target.value)}
+                      placeholder="Extracted from Excel..."
+                      className="font-mono bg-secondary/20 border-border focus:border-primary"
+                    />
+                  </div>
+                
+                  <div className="space-y-2 col-span-2">
+                    <Label htmlFor="avgLoss">Target Average Loss (dB)</Label>
+                    <div className="relative">
+                      <Input 
+                        id="avgLoss" 
+                        type="number" 
+                        step="0.1"
+                        value={averageLoss} 
+                        onChange={(e) => setAverageLoss(e.target.value)}
+                        className="font-mono bg-secondary/20 border-border focus:border-primary pr-12"
+                      />
+                      <div className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm font-mono">
+                        dB
+                      </div>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Values will be randomized ±0.5 dB from this average.
+                    </p>
+                  </div>
                 </div>
 
                 <div className="pt-4 border-t border-border">
