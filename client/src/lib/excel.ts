@@ -108,23 +108,66 @@ export async function parseExcelFile(file: File): Promise<{ cableId: string | nu
              }
            }
 
-           // Find Cable ID globally if we can
+           // ---------------------------------------------------------
+           // Look for Cable ID specifically around the header row
+           // ---------------------------------------------------------
            let foundCableId: string | null = null;
-           for (let i = 0; i < Math.min(20, jsonData.length); i++) {
-              const row = jsonData[i];
-              if (!row) continue;
-              for (let j = 0; j < row.length; j++) {
-                 if (typeof row[j] === 'string') {
-                    const txt = row[j].toString().toLowerCase();
-                    if ((txt.includes('cable') && txt.includes('id')) || txt === 'cable') {
-                       // Check next cell or same row
-                       if (row[j+1]) foundCableId = row[j+1].toString();
-                       // Or check row below
-                       else if (jsonData[i+1] && jsonData[i+1][j]) foundCableId = jsonData[i+1][j].toString();
+           
+           // Search window: 5 rows before and 5 rows after the Power Strand Header
+           const startRow = Math.max(0, powerStrandHeaderRow - 5);
+           const endRow = Math.min(jsonData.length, powerStrandHeaderRow + 5);
+
+           console.log(`Searching for Cable ID between rows ${startRow} and ${endRow}`);
+
+           for (let r = startRow; r < endRow; r++) {
+             const row = jsonData[r];
+             if (!row) continue;
+             
+             for (let c = 0; c < row.length; c++) {
+               const cell = row[c];
+               if (typeof cell === 'string') {
+                 const val = cell.toLowerCase().trim();
+                 // Check for "Cable ID" label
+                 if ((val.includes('cable') && val.includes('id')) || val === 'cable' || val === 'cableid') {
+                    console.log(`Found Cable ID candidate label at [${r}, ${c}]: ${cell}`);
+                    
+                    // Strategy 1: Value is in the same cell (e.g. "Cable ID: PON915B")
+                    const parts = cell.split(/[:=]/); // Split by : or =
+                    if (parts.length > 1) {
+                      const potentialValue = parts[1].trim();
+                      if (potentialValue.length > 0) {
+                        foundCableId = potentialValue;
+                        console.log(`-> Extracted from same cell: ${foundCableId}`);
+                      }
+                    } 
+                    
+                    // Strategy 2: Check cell to the right (Col + 1)
+                    if (!foundCableId && row[c+1] && String(row[c+1]).trim()) {
+                      foundCableId = String(row[c+1]).trim();
+                      console.log(`-> Extracted from right cell [${r}, ${c+1}]: ${foundCableId}`);
+                    }
+
+                    // Strategy 3: Check cell below (Row + 1)
+                    if (!foundCableId && jsonData[r+1] && jsonData[r+1][c] && String(jsonData[r+1][c]).trim()) {
+                       foundCableId = String(jsonData[r+1][c]).trim();
+                       console.log(`-> Extracted from cell below [${r+1}, ${c}]: ${foundCableId}`);
                     }
                  }
+               }
+             }
+             if (foundCableId) break;
+           }
+           
+           // Fallback: If user explicitly mentioned N23 (index 13, row 22 if 0-indexed), let's peek there if we failed
+           if (!foundCableId && jsonData[22] && jsonData[22][13]) {
+              console.log("Checking specific coordinate N23 (approx [22,13])");
+              // This is a blind guess based on user hint, strictly as fallback
+              const val = jsonData[22][13];
+              if (typeof val === 'string' || typeof val === 'number') {
+                 // Only use if it looks like an ID (alphanumeric)
+                 foundCableId = String(val).trim();
+                 console.log(`-> Extracted from N23 fallback: ${foundCableId}`);
               }
-              if (foundCableId) break;
            }
 
            const uniqueStrands = Array.from(new Set(strands)).sort((a, b) => a - b);
