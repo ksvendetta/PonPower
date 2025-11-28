@@ -19,6 +19,27 @@ export default function Home() {
   const [averageLoss, setAverageLoss] = useState<string>("-15.5");
   const [jsonOutput, setJsonOutput] = useState<string>("");
   const [isProcessing, setIsProcessing] = useState(false);
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+
+  useEffect(() => {
+    const handler = (e: any) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+    };
+    window.addEventListener('beforeinstallprompt', handler);
+    return () => window.removeEventListener('beforeinstallprompt', handler);
+  }, []);
+
+  const handleInstall = () => {
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      deferredPrompt.userChoice.then((choiceResult: any) => {
+        if (choiceResult.outcome === 'accepted') {
+          setDeferredPrompt(null);
+        }
+      });
+    }
+  };
 
   // Parse file when uploaded
   useEffect(() => {
@@ -118,6 +139,12 @@ export default function Home() {
             <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
             SYSTEM ONLINE
           </div>
+          {deferredPrompt && (
+            <Button onClick={handleInstall} size="sm" className="gap-2 bg-primary text-primary-foreground hover:bg-primary/90">
+              <Download className="w-4 h-4" />
+              Install App
+            </Button>
+          )}
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
