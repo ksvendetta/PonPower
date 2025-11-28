@@ -58,8 +58,6 @@ export async function parseExcelFile(file: File): Promise<{ cableId: string | nu
         const worksheet = workbook.Sheets[firstSheetName];
         const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
 
-        console.log("Parsed Excel Data (first 5 rows):", jsonData.slice(0, 5));
-
         if (jsonData.length === 0) {
           resolve({ cableId: null, strands: [] });
           return;
@@ -94,10 +92,6 @@ export async function parseExcelFile(file: File): Promise<{ cableId: string | nu
         // If we found the specific column, iterate down from there
         if (powerStrandColIndex !== -1) {
            const strands: number[] = [];
-           
-           // Look for Cable ID in the whole sheet if we haven't found it yet
-           // (Re-using logic or keeping it separate)
-           // Let's do a quick scan for Cable ID nearby if possible, or just use the global scan later.
            
            // Extract strands from the Power Test Strand column
            for (let i = powerStrandHeaderRow + 1; i < jsonData.length; i++) {
@@ -140,9 +134,16 @@ export async function parseExcelFile(file: File): Promise<{ cableId: string | nu
         }
 
         // ---------------------------------------------------------
-        // FALLBACK STRATEGY (Existing Logic)
+        // FALLBACK STRATEGY: Standard Header Search
         // ---------------------------------------------------------
+        let cableIdIndex = -1;
+        let strandIndex = -1;
+        let headerRowIndex = -1;
+
+        for (let i = 0; i < Math.min(20, jsonData.length); i++) {
           const row = jsonData[i];
+          if (!row) continue;
+
           row.forEach((cell: any, index: number) => {
             if (typeof cell === 'string') {
               const lower = cell.toLowerCase().trim();
@@ -198,9 +199,11 @@ export async function parseExcelFile(file: File): Promise<{ cableId: string | nu
           }
         } 
         
-        // Fallback: If no strands found via headers, look for numeric columns
+        // ---------------------------------------------------------
+        // FINAL FALLBACK: Numeric Column Search
+        // ---------------------------------------------------------
         if (strands.length === 0) {
-          console.log("No strands found via headers, attempting fallback...");
+          console.log("No strands found via headers, attempting numeric fallback...");
           
           // Find a column that has mostly numbers
           const columnScores = new Map<number, number>();
