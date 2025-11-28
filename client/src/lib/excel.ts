@@ -64,51 +64,38 @@ export async function parseExcelFile(file: File): Promise<{ cableId: string | nu
         }
         
         // ---------------------------------------------------------
-        // Look for CFAS in range X2:AM4 (Indices: Rows 1-3, Cols 23-38)
-        // The user states the value is ALWAYS in this range (likely merged).
-        // In sheet_to_json, the value of a merged cell is in the top-left index.
-        // X2 is Row 2 (index 1), Col X (index 23).
+        // Look for CFAS in range W2:AM4 (Indices: Rows 1-3, Cols 22-40)
+        // User stated X2, but data suggests it might be in W (index 22).
+        // We scan a wider range (Cols 20-40) in Rows 1-3 to be robust.
         // ---------------------------------------------------------
         let foundCfas: string | null = null;
-        console.log("Searching for CFAS in range X2:AM4");
-        
-        // Direct check at X2 (Row 2, Col 23) first as it's the top-left of the range
-        if (jsonData[1] && jsonData[1][23] !== undefined) {
-           const val = jsonData[1][23];
-           if (typeof val === 'string' && val.trim().length > 0) {
-              foundCfas = val.trim();
-              console.log(`Found CFAS at exact X2 [1, 23]: ${foundCfas}`);
-           } else if (typeof val === 'number') {
-              foundCfas = String(val);
-              console.log(`Found numeric CFAS at exact X2 [1, 23]: ${foundCfas}`);
-           }
-        }
+        console.log("Searching for CFAS in expanded range Cols 20-40, Rows 1-3");
 
-        // Fallback: Scan the range if X2 was empty
-        if (!foundCfas) {
-          // Row loop: 1 to 3 (Rows 2-4)
-          for (let r = 1; r <= 3; r++) {
-             if (jsonData.length <= r) break;
-             const row = jsonData[r];
-             if (!row) continue;
-             
-             // Col loop: 23 to 38 (Cols X to AM)
-             for (let c = 23; c <= 38; c++) {
-                if (row.length <= c) break;
-                const cell = row[c];
-                
-                // Check for string or number
-                if (cell !== null && cell !== undefined && cell !== '') {
-                   const strVal = String(cell).trim();
-                   if (strVal.length > 0) {
-                      foundCfas = strVal;
-                      console.log(`Found CFAS candidate in scan at [${r}, ${c}]: ${foundCfas}`);
-                      break;
-                   }
-                }
-             }
-             if (foundCfas) break;
-          }
+        // Row loop: 1 to 3 (Rows 2-4)
+        for (let r = 1; r <= 3; r++) {
+           if (jsonData.length <= r) break;
+           const row = jsonData[r];
+           if (!row) continue;
+           
+           // Col loop: 20 to 40 (Cols U to AN) - wider net to catch W or X
+           for (let c = 20; c <= 40; c++) {
+              if (row.length <= c) continue;
+              const cell = row[c];
+              
+              // Check for string or number
+              if (cell !== null && cell !== undefined && cell !== '') {
+                 const strVal = String(cell).trim();
+                 
+                 // Filter out common labels if they appear in this area (unlikely but safe)
+                 // CFAS is typically a code like "A058G7R"
+                 if (strVal.length > 0 && strVal !== "-" && !strVal.includes("TEST SHEET")) {
+                    foundCfas = strVal;
+                    console.log(`Found CFAS candidate in scan at [${r}, ${c}]: ${foundCfas}`);
+                    break;
+                 }
+              }
+           }
+           if (foundCfas) break;
         }
 
         // ---------------------------------------------------------
