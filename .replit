@@ -4,6 +4,7 @@ hidden = [".config", ".git", "generated-icon.png", "node_modules", "dist"]
 
 [nix]
 channel = "stable-24_05"
+packages = ["imagemagick"]
 
 [deployment]
 deploymentTarget = "static"
@@ -21,10 +22,6 @@ externalPort = 3001
 [[ports]]
 localPort = 5002
 externalPort = 3002
-
-[[ports]]
-localPort = 34515
-externalPort = 3003
 
 [[ports]]
 localPort = 40245
