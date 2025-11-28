@@ -65,12 +65,83 @@ export async function parseExcelFile(file: File): Promise<{ cableId: string | nu
           return;
         }
 
-        let cableIdIndex = -1;
-        let strandIndex = -1;
-        let headerRowIndex = -1;
+        // ---------------------------------------------------------
+        // PRIORITY STRATEGY: Look for "Power Test Strand" explicitly
+        // ---------------------------------------------------------
+        let powerStrandColIndex = -1;
+        let powerStrandHeaderRow = -1;
 
-        // Enhanced Header Detection
-        for (let i = 0; i < Math.min(20, jsonData.length); i++) {
+        // Search for the specific header "Power Test Strand"
+        for (let i = 0; i < Math.min(50, jsonData.length); i++) {
+          const row = jsonData[i];
+          if (!row) continue;
+          
+          for (let j = 0; j < row.length; j++) {
+            const cell = row[j];
+            if (typeof cell === 'string') {
+              const lower = cell.toLowerCase().trim();
+              if (lower.includes("power test strand")) {
+                powerStrandColIndex = j;
+                powerStrandHeaderRow = i;
+                console.log(`Found PRIORITY header 'Power Test Strand' at Row ${i}, Col ${j}`);
+                break;
+              }
+            }
+          }
+          if (powerStrandColIndex !== -1) break;
+        }
+
+        // If we found the specific column, iterate down from there
+        if (powerStrandColIndex !== -1) {
+           const strands: number[] = [];
+           
+           // Look for Cable ID in the whole sheet if we haven't found it yet
+           // (Re-using logic or keeping it separate)
+           // Let's do a quick scan for Cable ID nearby if possible, or just use the global scan later.
+           
+           // Extract strands from the Power Test Strand column
+           for (let i = powerStrandHeaderRow + 1; i < jsonData.length; i++) {
+             const row = jsonData[i];
+             if (!row) continue;
+             
+             const cell = row[powerStrandColIndex];
+             if (cell !== undefined && cell !== null && cell !== '') {
+               const val = parseInt(cell);
+               // Check if it's a valid strand number (and not another header or label)
+               if (!isNaN(val) && val > 0) {
+                 strands.push(val);
+               }
+             }
+           }
+
+           // Find Cable ID globally if we can
+           let foundCableId: string | null = null;
+           for (let i = 0; i < Math.min(20, jsonData.length); i++) {
+              const row = jsonData[i];
+              if (!row) continue;
+              for (let j = 0; j < row.length; j++) {
+                 if (typeof row[j] === 'string') {
+                    const txt = row[j].toString().toLowerCase();
+                    if ((txt.includes('cable') && txt.includes('id')) || txt === 'cable') {
+                       // Check next cell or same row
+                       if (row[j+1]) foundCableId = row[j+1].toString();
+                       // Or check row below
+                       else if (jsonData[i+1] && jsonData[i+1][j]) foundCableId = jsonData[i+1][j].toString();
+                    }
+                 }
+              }
+              if (foundCableId) break;
+           }
+
+           const uniqueStrands = Array.from(new Set(strands)).sort((a, b) => a - b);
+           console.log(`Priority Extraction complete. CableID: ${foundCableId}, Strands: ${uniqueStrands.length}`);
+           resolve({ cableId: foundCableId, strands: uniqueStrands });
+           return;
+        }
+
+        // ---------------------------------------------------------
+        // FALLBACK STRATEGY (Existing Logic)
+        // ---------------------------------------------------------
           const row = jsonData[i];
           row.forEach((cell: any, index: number) => {
             if (typeof cell === 'string') {
