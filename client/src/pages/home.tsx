@@ -180,7 +180,7 @@ export default function Home() {
                   </div>
 
                   <div className="space-y-2 col-span-2">
-                    <Label htmlFor="cfas">CFAS</Label>
+                    <Label htmlFor="cfas">Project #</Label>
                     <Input 
                       id="cfas" 
                       value={cfas} 
