@@ -16,16 +16,13 @@ function check(input: string): boolean {
 }
 
 export function PasswordGate({ children }: { children: React.ReactNode }) {
-  const [authenticated, setAuthenticated] = useState(
-    () => sessionStorage.getItem("auth") === HASH
-  );
+  const [authenticated, setAuthenticated] = useState(false);
   const [password, setPassword] = useState("");
   const [error, setError] = useState(false);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (check(password)) {
-      sessionStorage.setItem("auth", HASH);
       setAuthenticated(true);
       setError(false);
     } else {

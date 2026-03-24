@@ -1,11 +1,12 @@
-const CACHE_NAME = 'fiber-gen-v2';
+const CACHE_NAME = 'fiber-gen-v3';
+const BASE = self.registration.scope;
 const STATIC_ASSETS = [
-  '/',
-  '/index.html',
-  '/manifest.json',
-  '/favicon.png',
-  '/icon-192.png',
-  '/icon-512.png'
+  BASE,
+  BASE + 'index.html',
+  BASE + 'manifest.json',
+  BASE + 'favicon.png',
+  BASE + 'icon-192.png',
+  BASE + 'icon-512.png'
 ];
 
 // Install event: Cache core static assets immediately
@@ -76,7 +77,7 @@ self.addEventListener('fetch', (event) => {
         // We could return a fallback offline page here if we had one
         // For now, we hope the main index.html is cached
         if (event.request.mode === 'navigate') {
-            return caches.match('/index.html');
+            return caches.match(BASE + 'index.html');
         }
       });
     })
