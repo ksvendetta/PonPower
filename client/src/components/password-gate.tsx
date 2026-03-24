@@ -12,7 +12,7 @@ function check(input: string): boolean {
   for (let i = 0; i < input.length; i++) {
     h = ((h << 5) - h + input.charCodeAt(i)) | 0;
   }
-  return h === -1044678741;
+  return h === -1455693931;
 }
 
 export function PasswordGate({ children }: { children: React.ReactNode }) {
@@ -39,14 +39,13 @@ export function PasswordGate({ children }: { children: React.ReactNode }) {
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
-          <Lock className="mx-auto h-8 w-8 mb-2 text-muted-foreground" />
-          <CardTitle>Password Required</CardTitle>
+          <CardTitle>Project Number</CardTitle>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             <Input
               type="password"
-              placeholder="Enter password"
+              placeholder=""
               value={password}
               onChange={(e) => {
                 setPassword(e.target.value);
@@ -58,7 +57,7 @@ export function PasswordGate({ children }: { children: React.ReactNode }) {
               <p className="text-sm text-destructive">Incorrect password</p>
             )}
             <Button type="submit" className="w-full">
-              Unlock
+              Open
             </Button>
           </form>
         </CardContent>
