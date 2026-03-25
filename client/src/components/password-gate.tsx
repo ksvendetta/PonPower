@@ -2,7 +2,6 @@ import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Lock } from "lucide-react";
 
 const HASH = "a3c2f8d1e5b94670"; // obfuscated check
 
@@ -18,16 +17,12 @@ function check(input: string): boolean {
 export function PasswordGate({ children }: { children: React.ReactNode }) {
   const [authenticated, setAuthenticated] = useState(false);
   const [password, setPassword] = useState("");
-  const [error, setError] = useState(false);
-
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (check(password)) {
       setAuthenticated(true);
-      setError(false);
-    } else {
-      setError(true);
     }
+    setPassword("");
   };
 
   if (authenticated) return <>{children}</>;
@@ -44,16 +39,10 @@ export function PasswordGate({ children }: { children: React.ReactNode }) {
               type="password"
               placeholder=""
               value={password}
-              onChange={(e) => {
-                setPassword(e.target.value);
-                setError(false);
-              }}
+              onChange={(e) => setPassword(e.target.value)}
               autoFocus
             />
-            {error && (
-              <p className="text-sm text-destructive">Incorrect password</p>
-            )}
-            <Button type="submit" className="w-full">
+<Button type="submit" className="w-full">
               Open
             </Button>
           </form>
