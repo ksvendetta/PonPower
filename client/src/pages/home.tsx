@@ -6,12 +6,14 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { parseExcelFile, generateReport, JsonTemplate } from "@/lib/excel";
-import { Download, FileJson, RefreshCw, Copy, Settings2, FileSpreadsheet } from "lucide-react";
+import { parseExcelFile, generateReport } from "@/lib/excel";
+import { AppToggle } from "@/components/app-toggle";
+import { Download, FileJson, Copy, Save } from "lucide-react";
 
 export default function Home() {
   const { toast } = useToast();
   const [file, setFile] = useState<File | null>(null);
+  const [fileHandle, setFileHandle] = useState<FileSystemFileHandle | null>(null);
   const [cableId, setCableId] = useState<string>("");
   const [wireCenterClli, setWireCenterClli] = useState<string>("");
   const [cfas, setCfas] = useState<string>("");
@@ -80,35 +82,37 @@ export default function Home() {
     if (strands.length > 0) {
       const loss = parseFloat(averageLoss);
       if (!isNaN(loss)) {
-        const report = generateReport(cableId, strands, loss, wireCenterClli, cfas);
+        const ordered = [...strands].sort((a, b) => a - b);
+        const report = generateReport(cableId, ordered, loss, wireCenterClli, cfas);
         setJsonOutput(JSON.stringify(report, null, 2));
       }
     }
   }, [cableId, strands, averageLoss, wireCenterClli, cfas]);
 
-  const handleDownload = () => {
+  const handleSave = () => {
     try {
-      // Validate JSON first
       const json = JSON.parse(jsonOutput);
-      const blob = new Blob([JSON.stringify(json, null, 2)], { type: "application/json" });
+      const pretty = JSON.stringify(json, null, 2);
+      const base = cfas?.trim() || cableId?.trim() || "report";
+      const filename = `${base}.json`;
+      const blob = new Blob([pretty], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${cableId || "report"}_${new Date().toISOString().split('T')[0]}.json`;
+      a.download = filename;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      
       toast({
-        title: "Downloaded",
-        description: "Report saved to your device.",
+        title: "Saved",
+        description: `Saved as ${filename} to your Downloads folder.`,
       });
-    } catch (e) {
+    } catch (e: any) {
       toast({
         variant: "destructive",
-        title: "Invalid JSON",
-        description: "The JSON content is invalid and cannot be saved.",
+        title: "Could Not Save",
+        description: e?.message ?? "The JSON content is invalid and cannot be saved.",
       });
     }
   };
@@ -124,7 +128,12 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-background p-6 md:p-12 font-sans text-foreground">
       <div className="max-w-6xl mx-auto space-y-8">
-        
+
+        {/* Top center: app toggle */}
+        <div className="flex justify-center">
+          <AppToggle active="ponpower" />
+        </div>
+
         {/* Header */}
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-border pb-6">
           <div>
@@ -148,10 +157,10 @@ export default function Home() {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-          
+
           {/* Left Column: Inputs */}
           <div className="lg:col-span-5 space-y-6">
-            
+
             {/* Step 1: Upload */}
             <Card className="border-border/50 bg-card/50 backdrop-blur-sm shadow-lg">
               <CardHeader>
@@ -164,7 +173,12 @@ export default function Home() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <FileUpload onFileSelect={setFile} />
+                <FileUpload
+                  onFileSelect={(f, h) => {
+                    setFile(f);
+                    setFileHandle(h ?? null);
+                  }}
+                />
               </CardContent>
             </Card>
 
@@ -183,9 +197,9 @@ export default function Home() {
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2 col-span-2">
                     <Label htmlFor="cableId">Cable ID</Label>
-                    <Input 
-                      id="cableId" 
-                      value={cableId} 
+                    <Input
+                      id="cableId"
+                      value={cableId}
                       onChange={(e) => setCableId(e.target.value)}
                       placeholder="Extracted from Excel..."
                       className="font-mono bg-secondary/20 border-border focus:border-primary"
@@ -194,9 +208,9 @@ export default function Home() {
 
                   <div className="space-y-2 col-span-2">
                     <Label htmlFor="wireCenterClli">Wire Center CLLI</Label>
-                    <Input 
-                      id="wireCenterClli" 
-                      value={wireCenterClli} 
+                    <Input
+                      id="wireCenterClli"
+                      value={wireCenterClli}
                       onChange={(e) => setWireCenterClli(e.target.value)}
                       placeholder="e.g. LKGNWI01"
                       className="font-mono bg-secondary/20 border-border focus:border-primary"
@@ -208,23 +222,23 @@ export default function Home() {
 
                   <div className="space-y-2 col-span-2">
                     <Label htmlFor="cfas">Project #</Label>
-                    <Input 
-                      id="cfas" 
-                      value={cfas} 
+                    <Input
+                      id="cfas"
+                      value={cfas}
                       onChange={(e) => setCfas(e.target.value)}
                       placeholder="Extracted from Excel..."
                       className="font-mono bg-secondary/20 border-border focus:border-primary"
                     />
                   </div>
-                
+
                   <div className="space-y-2 col-span-2">
                     <Label htmlFor="avgLoss">Target Average Loss (dB)</Label>
                     <div className="relative">
-                      <Input 
-                        id="avgLoss" 
-                        type="number" 
+                      <Input
+                        id="avgLoss"
+                        type="number"
                         step="0.1"
-                        value={averageLoss} 
+                        value={averageLoss}
                         onChange={(e) => setAverageLoss(e.target.value)}
                         className="font-mono bg-secondary/20 border-border focus:border-primary pr-12"
                       />
@@ -261,15 +275,15 @@ export default function Home() {
                     <Button variant="outline" size="sm" onClick={handleCopy} className="h-8 text-xs gap-1.5">
                       <Copy className="w-3.5 h-3.5" /> Copy
                     </Button>
-                    <Button onClick={handleDownload} size="sm" className="h-8 text-xs gap-1.5" disabled={!jsonOutput}>
-                      <Download className="w-3.5 h-3.5" /> Download JSON
+                    <Button onClick={handleSave} size="sm" className="h-8 text-xs gap-1.5" disabled={!jsonOutput}>
+                      <Save className="w-3.5 h-3.5" /> Save
                     </Button>
                   </div>
                 </div>
               </CardHeader>
-              
+
               <div className="flex-1 relative group">
-                <Textarea 
+                <Textarea
                   value={jsonOutput}
                   onChange={(e) => setJsonOutput(e.target.value)}
                   className="w-full h-[600px] lg:h-full resize-none rounded-none border-0 p-4 font-mono text-sm bg-background/50 focus-visible:ring-0 text-blue-300 leading-relaxed"

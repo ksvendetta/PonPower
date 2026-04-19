@@ -205,7 +205,7 @@ export async function parseExcelFile(file: File): Promise<{ cableId: string | nu
               }
            }
 
-           const uniqueStrands = Array.from(new Set(strands)).sort((a, b) => a - b);
+           const uniqueStrands = Array.from(new Set(strands));
            console.log(`Priority Extraction complete. CableID: ${foundCableId}, Strands: ${uniqueStrands.length}, CFAS: ${foundCfas}`);
            resolve({ cableId: foundCableId, strands: uniqueStrands, cfas: foundCfas });
            return;
@@ -323,7 +323,7 @@ export async function parseExcelFile(file: File): Promise<{ cableId: string | nu
         }
 
         // Deduplicate strands and sort
-        const uniqueStrands = Array.from(new Set(strands)).sort((a, b) => a - b);
+        const uniqueStrands = Array.from(new Set(strands));
         
         console.log(`Extraction complete. CableID: ${foundCableId}, Strands: ${uniqueStrands.length}, CFAS: ${foundCfas}`);
         resolve({ cableId: foundCableId, strands: uniqueStrands, cfas: foundCfas });
