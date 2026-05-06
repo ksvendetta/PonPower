@@ -330,6 +330,43 @@ export function findWaldoDuplicateGroups(terminals: ExfoTerminal[]): WaldoGroup[
   return groups;
 }
 
+export interface FiberCluster {
+  participantRows: number[];
+  groups: FiberGroup[];
+}
+
+export function clusterFiberGroupsByParticipants(fiberGroups: FiberGroup[]): FiberCluster[] {
+  const map = new Map<string, FiberCluster>();
+  for (const g of fiberGroups) {
+    const rows = Array.from(new Set(g.items.map(i => Number(i.key.split('|')[0]))))
+      .sort((a, b) => a - b);
+    const sig = rows.join(',');
+    if (!map.has(sig)) map.set(sig, { participantRows: rows, groups: [] });
+    map.get(sig)!.groups.push(g);
+  }
+  const clusters = Array.from(map.values());
+  clusters.sort((a, b) => a.groups[0].strand - b.groups[0].strand);
+  return clusters;
+}
+
+export function pickCurrentClusterWinner(cluster: FiberCluster, excluded: Set<string>): number {
+  const counts = new Map<number, number>();
+  for (const g of cluster.groups) {
+    for (const c of g.items) {
+      if (!excluded.has(c.key)) {
+        const r = Number(c.key.split('|')[0]);
+        counts.set(r, (counts.get(r) || 0) + 1);
+      }
+    }
+  }
+  let best = cluster.participantRows[0], bestCount = -1;
+  for (const r of cluster.participantRows) {
+    const c = counts.get(r) || 0;
+    if (c > bestCount) { bestCount = c; best = r; }
+  }
+  return best;
+}
+
 export function findFiberDuplicateGroups(cands: ExfoCandidate[]): FiberGroup[] {
   const byStrand = new Map<number, ExfoCandidate[]>();
   for (const c of cands) {
