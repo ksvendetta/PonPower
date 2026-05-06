@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FileUpload } from "@/components/ui/file-upload";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -13,6 +13,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+} from "@/components/ui/dialog";
+import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import {
   parseExcelFile,
@@ -23,8 +27,19 @@ import {
   Terminal,
   ParsedWorkbook,
 } from "@/lib/excel";
+import {
+  parseExfoXlsx, ExfoXlsxParse, parseAddress, formatDistance, resolveCityFromCLLI,
+} from "@/lib/exfo";
+import {
+  GeocodeHit, loadGeocodeCache, renderEmbeddedMap, autoResolveCity,
+  drawConnections, clearConnections, flashPonOnMap, buildOpenInNewTabHtml,
+} from "@/lib/exfo-maps";
 import { AppToggle } from "@/components/app-toggle";
-import { Download, FileJson, Copy, Save, FileSpreadsheet } from "lucide-react";
+import { Download, FileJson, Copy, Save, FileSpreadsheet, Settings, MapPin, ExternalLink, Search } from "lucide-react";
+
+const API_KEY_STORAGE = "f2job.gmapsApiKey";
+const API_KEY_SEEDED = "f2job.gmapsApiKey.seeded";
+const DEFAULT_API_KEY = "AIzaSyDWvptOInAO5y7O5pHtVj0GhFQ9aVeYIMc";
 
 export default function Home() {
   const { toast } = useToast();
@@ -40,6 +55,49 @@ export default function Home() {
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [parsedWorkbook, setParsedWorkbook] = useState<ParsedWorkbook | null>(null);
   const [staggeredTerminals, setStaggeredTerminals] = useState<Terminal[]>([]);
+
+  // ----- Map state (mirrors F2 Exfo) -----
+  const [parsedExfo, setParsedExfo] = useState<ExfoXlsxParse | null>(null);
+  const [apiKey, setApiKey] = useState("");
+  const [showSettings, setShowSettings] = useState(false);
+  const [city, setCity] = useState("Appleton, WI");
+  const [mapStatus, setMapStatus] = useState("");
+  const [mapStatusKind, setMapStatusKind] = useState<"err" | "ok" | "">("");
+  const [mapLoaded, setMapLoaded] = useState(false);
+  const [pfpLocation, setPfpLocation] = useState<GeocodeHit | null>(null);
+  const [distances, setDistances] = useState<Map<number, number>>(new Map());
+  const [showConnections, setShowConnections] = useState(false);
+  const [ponSearch, setPonSearch] = useState("");
+  const mapCanvasRef = useRef<HTMLDivElement>(null);
+  const mapStateRef = useRef<{
+    gmap: any | null; gmarkers: any[]; connections: any[]; showConnections: boolean;
+  }>({ gmap: null, gmarkers: [], connections: [], showConnections: false });
+  const geocodeCacheRef = useRef<Map<string, GeocodeHit>>(new Map());
+
+  // Load API key + cache once
+  useEffect(() => {
+    try {
+      let v = localStorage.getItem(API_KEY_STORAGE);
+      if (v === null && !localStorage.getItem(API_KEY_SEEDED)) {
+        v = DEFAULT_API_KEY;
+        localStorage.setItem(API_KEY_STORAGE, v);
+        localStorage.setItem(API_KEY_SEEDED, "1");
+      }
+      if (v) setApiKey(v);
+    } catch (_) {}
+    geocodeCacheRef.current = loadGeocodeCache();
+  }, []);
+
+  // Persist API key
+  useEffect(() => {
+    try { localStorage.setItem(API_KEY_STORAGE, apiKey); } catch (_) {}
+  }, [apiKey]);
+
+  // Auto-set city when CLLI changes
+  useEffect(() => {
+    const hit = resolveCityFromCLLI(wireCenterClli);
+    if (hit) setCity(hit.city);
+  }, [wireCenterClli]);
 
   useEffect(() => {
     const handler = (e: any) => {
@@ -65,6 +123,26 @@ export default function Home() {
   useEffect(() => {
     if (file) {
       setIsProcessing(true);
+      // Reset map state for new file
+      setParsedExfo(null);
+      setPfpLocation(null);
+      setDistances(new Map());
+      setMapLoaded(false);
+      setMapStatus("");
+      setMapStatusKind("");
+      if (mapStateRef.current.gmap) {
+        for (const m of mapStateRef.current.gmarkers) m.setMap(null);
+        mapStateRef.current.gmarkers = [];
+        clearConnections(mapStateRef.current);
+        mapStateRef.current.gmap = null;
+      }
+      if (mapCanvasRef.current) mapCanvasRef.current.style.display = "none";
+
+      // Also parse for PFP/terminal map data
+      file.arrayBuffer()
+        .then(ab => { try { setParsedExfo(parseExfoXlsx(ab)); } catch (_) {} })
+        .catch(() => {});
+
       Promise.all([parseExcelFile(file), parseTerminals(file).catch(() => null)])
         .then(([data, parsed]) => {
           if (data.cableId) setCableId(data.cableId);
@@ -151,6 +229,122 @@ export default function Home() {
     });
   };
 
+  const handleLoadMap = async () => {
+    if (!apiKey.trim()) {
+      setMapStatus("Add a Google Maps API key in Settings.");
+      setMapStatusKind("err");
+      return;
+    }
+    if (!parsedExfo || !mapCanvasRef.current) return;
+    if (!parsedExfo.terminals.length) return;
+    try {
+      // Try auto-resolve if user hasn't manually set city
+      const hit = resolveCityFromCLLI(wireCenterClli);
+      let useCity = city.trim();
+      if (!hit) {
+        useCity = await autoResolveCity(
+          apiKey.trim(),
+          [wireCenterClli, cableId].filter(Boolean),
+          parsedExfo.pfpName,
+          parsedExfo.terminals,
+          geocodeCacheRef.current,
+          city.trim(),
+          (m, k) => { setMapStatus(m); setMapStatusKind(k || ""); }
+        );
+        if (useCity && useCity !== city) setCity(useCity);
+      }
+      const result = await renderEmbeddedMap(
+        mapCanvasRef.current,
+        mapStateRef.current,
+        {
+          apiKey: apiKey.trim(),
+          city: useCity,
+          pfpName: parsedExfo.pfpName,
+          terminals: parsedExfo.terminals,
+          cache: geocodeCacheRef.current,
+          onStatus: (m, k) => { setMapStatus(m); setMapStatusKind(k || ""); },
+        }
+      );
+      setPfpLocation(result.pfpLocation);
+      setDistances(result.distances);
+      setMapLoaded(true);
+      setMapStatus(`Mapped ${result.resolved} terminals in ${result.elapsedSec.toFixed(1)}s${result.failed ? ` — ${result.failed} failed` : ""}.`);
+      setMapStatusKind(result.failed ? "err" : "ok");
+    } catch (e: any) {
+      setMapStatus(e?.message || String(e));
+      setMapStatusKind("err");
+    }
+  };
+
+  const handleOpenMapInNewTab = () => {
+    if (!apiKey.trim() || !parsedExfo) {
+      setMapStatus("API key required — set it in Settings.");
+      setMapStatusKind("err");
+      return;
+    }
+    const html = buildOpenInNewTabHtml(
+      apiKey.trim(),
+      parsedExfo.project || cableId || "Terminal map",
+      parsedExfo.pfpName,
+      pfpLocation,
+      city.trim(),
+      parsedExfo.terminals,
+      geocodeCacheRef.current,
+      distances,
+      showConnections
+    );
+    const w = window.open("", "_blank");
+    if (!w) {
+      setMapStatus("Popup blocked — allow popups for this page.");
+      setMapStatusKind("err");
+      return;
+    }
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+  };
+
+  // Toggle connections on map
+  useEffect(() => {
+    mapStateRef.current.showConnections = showConnections;
+    if (!mapStateRef.current.gmap || !parsedExfo) return;
+    if (showConnections) {
+      drawConnections(mapStateRef.current, city, parsedExfo.terminals, geocodeCacheRef.current);
+    } else {
+      clearConnections(mapStateRef.current);
+    }
+  }, [showConnections, city, parsedExfo]);
+
+  const handleFlashPon = () => {
+    const raw = ponSearch.trim();
+    if (!raw) return;
+    const n = parseInt(raw, 10);
+    if (Number.isNaN(n)) {
+      setMapStatus("Enter a numeric Pon count.");
+      setMapStatusKind("err");
+      return;
+    }
+    if (!parsedExfo || !mapStateRef.current.gmap || !mapStateRef.current.gmarkers.length) {
+      setMapStatus("Load the map first.");
+      setMapStatusKind("err");
+      return;
+    }
+    const result = flashPonOnMap(mapStateRef.current, n, parsedExfo.terminals);
+    if (!result.matches) {
+      setMapStatus(`No terminal contains Pon count ${n}.`);
+      setMapStatusKind("err");
+    } else {
+      setMapStatus(`Flashing ${result.matches} terminal${result.matches > 1 ? "s" : ""} with Pon count ${n}.`);
+      setMapStatusKind("ok");
+    }
+  };
+
+  const maxDistance = (() => {
+    let m: number | null = null;
+    Array.from(distances.values()).forEach(v => { if (m == null || v > m) m = v; });
+    return m;
+  })();
+
   const handleDownloadConverted = async () => {
     if (!parsedWorkbook || staggeredTerminals.length === 0) return;
     try {
@@ -204,6 +398,9 @@ export default function Home() {
             <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
             SYSTEM ONLINE
           </div>
+          <Button variant="outline" size="sm" onClick={() => setShowSettings(true)} className="gap-2">
+            <Settings className="w-4 h-4" /> Settings
+          </Button>
           {deferredPrompt && (
             <Button onClick={handleInstall} size="sm" className="gap-2 bg-primary text-primary-foreground hover:bg-primary/90">
               <Download className="w-4 h-4" />
@@ -420,7 +617,135 @@ export default function Home() {
             )}
           </CardContent>
         </Card>
+
+        {/* Step 5: Terminal map */}
+        {parsedExfo && parsedExfo.terminals.length > 0 && (
+          <Card className="border-border/50 bg-card/50 backdrop-blur-sm shadow-lg">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <div className="w-6 h-6 rounded bg-primary/20 flex items-center justify-center text-primary text-xs font-bold">5</div>
+                Terminal map
+              </CardTitle>
+              <CardDescription>
+                {parsedExfo.pfpName ? <>PFP: <code>{parsedExfo.pfpName}</code> — {parseAddress(parsedExfo.pfpName)}</> : "PFP not detected in sheet header."}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-3 items-end">
+                <div className="space-y-1.5">
+                  <Label>City / State (added to each address for geocoding)</Label>
+                  <Input value={city} onChange={e => setCity(e.target.value)} />
+                </div>
+                <Button onClick={handleLoadMap} size="sm" className="gap-1.5">
+                  <MapPin className="w-3.5 h-3.5" /> {mapLoaded ? "Refresh map" : "Load map"}
+                </Button>
+              </div>
+              <div className="flex items-center gap-3 flex-wrap">
+                <Button onClick={handleOpenMapInNewTab} variant="outline" size="sm" className="gap-1.5" disabled={!mapLoaded}>
+                  <ExternalLink className="w-3.5 h-3.5" /> Open map in new tab
+                </Button>
+                <label className="flex items-center gap-2 text-xs cursor-pointer">
+                  <Switch checked={showConnections} onCheckedChange={setShowConnections} />
+                  Connect pins by strand order
+                </label>
+                {maxDistance != null && (
+                  <span className="text-xs text-muted-foreground">
+                    Furthest from PFP: <b>{formatDistance(maxDistance)}</b>
+                  </span>
+                )}
+              </div>
+              <div className="flex items-end gap-2">
+                <div className="space-y-1.5 flex-1">
+                  <Label>Find Pon count</Label>
+                  <Input
+                    type="number"
+                    placeholder="e.g. 125"
+                    min="0"
+                    value={ponSearch}
+                    onChange={e => setPonSearch(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter") handleFlashPon(); }}
+                  />
+                </div>
+                <Button onClick={handleFlashPon} variant="outline" size="sm" className="gap-1.5">
+                  <Search className="w-3.5 h-3.5" /> Flash
+                </Button>
+              </div>
+              {mapStatus && (
+                <p className={`text-xs ${mapStatusKind === "err" ? "text-red-400" : mapStatusKind === "ok" ? "text-green-400" : "text-muted-foreground"}`}>
+                  {mapStatus}
+                </p>
+              )}
+              <div ref={mapCanvasRef} style={{ width: "100%", height: 460, borderRadius: 8, background: "hsl(var(--secondary) / 0.4)", display: "none" }} />
+              <details>
+                <summary className="text-sm cursor-pointer text-muted-foreground hover:text-foreground">
+                  Addresses ({parsedExfo.terminals.length})
+                </summary>
+                <div className="max-h-[360px] overflow-auto border border-border rounded mt-2">
+                  <Table className="text-xs">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>#</TableHead>
+                        <TableHead>Terminal</TableHead>
+                        <TableHead>Address</TableHead>
+                        <TableHead>Waldo</TableHead>
+                        <TableHead>Distance from PFP</TableHead>
+                        <TableHead>Map</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {parsedExfo.terminals.map((t, i) => {
+                        const addr = parseAddress(t.terminal);
+                        const q = encodeURIComponent(city ? `${addr}, ${city}` : addr);
+                        const d = distances.get(t.row);
+                        return (
+                          <TableRow key={t.row}>
+                            <TableCell>{i + 1}</TableCell>
+                            <TableCell className="font-mono whitespace-nowrap">{t.terminal}</TableCell>
+                            <TableCell>{addr}</TableCell>
+                            <TableCell>{t.waldo}</TableCell>
+                            <TableCell>{d != null ? formatDistance(d) : <span className="text-muted-foreground">—</span>}</TableCell>
+                            <TableCell><a href={`https://www.google.com/maps/search/?api=1&query=${q}`} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Open</a></TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              </details>
+            </CardContent>
+          </Card>
+        )}
       </div>
+
+      <Dialog open={showSettings} onOpenChange={setShowSettings}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Settings</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label>Google Maps API key</Label>
+              <Input
+                type="password"
+                value={apiKey}
+                onChange={e => setApiKey(e.target.value)}
+                placeholder="AIza..."
+                autoComplete="off"
+                spellCheck={false}
+              />
+              <p className="text-xs text-muted-foreground">
+                Stored locally in your browser. Restrict the key by HTTP referrer in Google Cloud Console.{" "}
+                <a className="text-primary hover:underline" target="_blank" rel="noopener noreferrer" href="https://console.cloud.google.com/google/maps-apis/credentials">
+                  Create a key →
+                </a>
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button onClick={() => setShowSettings(false)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
