@@ -6,6 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
 import Home from "@/pages/home";
 import Iolm from "@/pages/iolm";
+import Exfo from "@/pages/exfo";
 import { PasswordGate } from "@/components/password-gate";
 
 const base = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -16,6 +17,7 @@ function Router() {
       <Switch>
         <Route path="/" component={Home} />
         <Route path="/iolm" component={Iolm} />
+        <Route path="/exfo" component={Exfo} />
         <Route component={NotFound} />
       </Switch>
     </WouterRouter>
