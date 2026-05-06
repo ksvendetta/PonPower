@@ -1,5 +1,25 @@
 import * as XLSX from 'xlsx';
 import ExcelJS from 'exceljs';
+import { unzipSync, zipSync, strFromU8, strToU8 } from 'fflate';
+
+function colNumberToLetters(n: number): string {
+  let s = '';
+  while (n > 0) {
+    const m = (n - 1) % 26;
+    s = String.fromCharCode(65 + m) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
+}
+
+function escapeXml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
 
 export interface Terminal {
   rowIndex: number; // 0-based
@@ -527,40 +547,74 @@ export async function generateConvertedXlsx(
   portColIndex = 38,
   strandColIndex = 39
 ): Promise<Uint8Array> {
-  const wb = new ExcelJS.Workbook();
-  await wb.xlsx.load(parsed.fileBuffer);
-  const ws = wb.getWorksheet(parsed.sheetName) ?? wb.worksheets[0];
+  const portColNum = portColIndex + 1;
+  const strandColNum = strandColIndex + 1;
+  const portColLetter = colNumberToLetters(portColNum);
+  const strandColLetter = colNumberToLetters(strandColNum);
+  const headerRowNum = parsed.headerRowIndex + 1;
+  const powerColLetter = colNumberToLetters(parsed.powerStrandColIndex + 1);
 
-  const portCol = portColIndex + 1;
-  const strandCol = strandColIndex + 1;
-  const headerRow = parsed.headerRowIndex + 1;
+  const zip = unzipSync(new Uint8Array(parsed.fileBuffer));
+  const sheetPath = Object.keys(zip).find((p) => /^xl\/worksheets\/sheet1\.xml$/i.test(p));
+  if (!sheetPath) throw new Error('Could not find sheet1.xml in workbook.');
+  let xml = strFromU8(zip[sheetPath]);
 
-  const headerTemplate = ws.getCell(headerRow, parsed.powerStrandColIndex + 1);
-
-  const writeHeader = (col: number, value: string) => {
-    const cell = ws.getCell(headerRow, col);
-    cell.value = value;
-    if (headerTemplate.style) cell.style = JSON.parse(JSON.stringify(headerTemplate.style));
+  const findCellStyle = (cellRef: string): string => {
+    const m = xml.match(new RegExp(`<c[^>]*\\sr="${cellRef}"[^>]*>`));
+    if (!m) return '';
+    const s = m[0].match(/\ss="(\d+)"/);
+    return s ? ` s="${s[1]}"` : '';
   };
-  writeHeader(portCol, 'Staggered Port');
-  writeHeader(strandCol, 'Staggered Strand');
+
+  const headerStyleAttr = findCellStyle(`${powerColLetter}${headerRowNum}`);
+  const firstTerminal = terminals.find((t) => t.staggeredPort !== undefined);
+  const dataStyleAttr = firstTerminal
+    ? findCellStyle(`${powerColLetter}${firstTerminal.rowIndex + 1}`)
+    : '';
+
+  const replaceColDef = (colNum: number, width: number) => {
+    const colLetter = colNumberToLetters(colNum);
+    const newDef = `<col min="${colNum}" max="${colNum}" customWidth="1" width="${width}"></col>`;
+    const re = new RegExp(`<col\\s[^>]*\\bmin="${colNum}"[^>]*\\bmax="${colNum}"[^>]*(?:\\/>|>\\s*<\\/col>)`);
+    if (re.test(xml)) {
+      xml = xml.replace(re, newDef);
+    } else {
+      xml = xml.replace(/<\/cols>/, `${newDef}</cols>`);
+      if (!/<\/cols>/.test(xml)) {
+        xml = xml.replace(/<sheetData>/, `<cols>${newDef}</cols><sheetData>`);
+      }
+    }
+    void colLetter;
+  };
+  replaceColDef(portColNum, 14);
+  replaceColDef(strandColNum, 16);
+
+  const insertCellsIntoRow = (rowNum: number, cellsXml: string) => {
+    const re = new RegExp(`(<row\\s[^>]*\\br="${rowNum}"[^>]*>)([\\s\\S]*?)(</row>)`);
+    if (re.test(xml)) {
+      xml = xml.replace(re, `$1$2${cellsXml}$3`);
+    } else {
+      const sheetDataClose = '</sheetData>';
+      const newRow = `<row r="${rowNum}">${cellsXml}</row>`;
+      xml = xml.replace(sheetDataClose, `${newRow}${sheetDataClose}`);
+    }
+  };
+
+  const headerCells =
+    `<c${headerStyleAttr} t="inlineStr" r="${portColLetter}${headerRowNum}"><is><t xml:space="preserve">${escapeXml('Staggered Port')}</t></is></c>` +
+    `<c${headerStyleAttr} t="inlineStr" r="${strandColLetter}${headerRowNum}"><is><t xml:space="preserve">${escapeXml('Staggered Strand')}</t></is></c>`;
+  insertCellsIntoRow(headerRowNum, headerCells);
 
   for (const t of terminals) {
     if (t.staggeredPort === undefined || t.staggeredStrand === undefined) continue;
-    const dataTemplate = ws.getCell(t.rowIndex + 1, parsed.powerStrandColIndex + 1);
-    const portCell = ws.getCell(t.rowIndex + 1, portCol);
-    const strandCell = ws.getCell(t.rowIndex + 1, strandCol);
-    portCell.value = t.staggeredPort;
-    strandCell.value = t.staggeredStrand;
-    if (dataTemplate.style) {
-      portCell.style = JSON.parse(JSON.stringify(dataTemplate.style));
-      strandCell.style = JSON.parse(JSON.stringify(dataTemplate.style));
-    }
+    const rowNum = t.rowIndex + 1;
+    const cells =
+      `<c${dataStyleAttr} r="${portColLetter}${rowNum}"><v>${t.staggeredPort}</v></c>` +
+      `<c${dataStyleAttr} r="${strandColLetter}${rowNum}"><v>${t.staggeredStrand}</v></c>`;
+    insertCellsIntoRow(rowNum, cells);
   }
 
-  ws.getColumn(portCol).width = 14;
-  ws.getColumn(strandCol).width = 16;
-
-  const buf = await wb.xlsx.writeBuffer();
-  return new Uint8Array(buf as ArrayBuffer);
+  zip[sheetPath] = strToU8(xml);
+  const out = zipSync(zip, { level: 6 });
+  return out;
 }
