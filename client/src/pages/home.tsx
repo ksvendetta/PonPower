@@ -151,10 +151,10 @@ export default function Home() {
     });
   };
 
-  const handleDownloadConverted = () => {
+  const handleDownloadConverted = async () => {
     if (!parsedWorkbook || staggeredTerminals.length === 0) return;
     try {
-      const bytes = generateConvertedXlsx(parsedWorkbook, staggeredTerminals);
+      const bytes = await generateConvertedXlsx(parsedWorkbook, staggeredTerminals);
       const blob = new Blob([bytes], {
         type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       });

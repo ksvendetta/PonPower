@@ -1,7 +1,8 @@
 import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 
 export interface Terminal {
-  rowIndex: number;
+  rowIndex: number; // 0-based
   waldoId: string;
   terminalName: string;
   cableId: string;
@@ -15,11 +16,11 @@ export interface Terminal {
 }
 
 export interface ParsedWorkbook {
-  workbook: XLSX.WorkBook;
+  fileBuffer: ArrayBuffer;
   sheetName: string;
-  headerRowIndex: number;
-  powerStrandColIndex: number;
-  totalStrandsColIndex: number;
+  headerRowIndex: number; // 0-based
+  powerStrandColIndex: number; // 0-based
+  totalStrandsColIndex: number; // 0-based
   terminals: Terminal[];
 }
 
@@ -403,90 +404,101 @@ export function generateReport(
 }
 
 export async function parseTerminals(file: File): Promise<ParsedWorkbook> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const data = new Uint8Array(e.target?.result as ArrayBuffer);
-        const workbook = XLSX.read(data, { type: 'array', cellStyles: true });
-        const sheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[sheetName];
-        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: null }) as any[][];
+  const arrayBuffer = await file.arrayBuffer();
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(arrayBuffer.slice(0));
+  const ws = wb.worksheets[0];
 
-        let headerRowIndex = -1;
-        let powerStrandColIndex = -1;
-        let waldoColIndex = -1;
-        let terminalColIndex = -1;
-        let cableIdColIndex = -1;
-        let otdrColIndex = -1;
-        let totalStrandsColIndex = -1;
-        let testpColIndex = -1;
-        let testpaColIndex = -1;
+  const cellText = (r: number, c: number): string => {
+    const v = ws.getCell(r, c).value;
+    if (v === null || v === undefined) return '';
+    if (typeof v === 'object' && 'richText' in (v as any)) {
+      return ((v as any).richText as Array<{ text: string }>).map((p) => p.text).join('');
+    }
+    if (typeof v === 'object' && 'text' in (v as any)) {
+      return String((v as any).text);
+    }
+    return String(v);
+  };
 
-        for (let i = 0; i < Math.min(50, jsonData.length); i++) {
-          const row = jsonData[i];
-          if (!row) continue;
-          for (let j = 0; j < row.length; j++) {
-            const cell = row[j];
-            if (typeof cell !== 'string') continue;
-            const lower = cell.toLowerCase().trim();
-            if (lower.includes('power test strand')) powerStrandColIndex = j;
-            if (lower === 'waldo id' || lower.includes('waldo')) waldoColIndex = j;
-            if (lower === 'terminal') terminalColIndex = j;
-            if (lower === 'cable id' || (lower.includes('cable') && lower.includes('id'))) cableIdColIndex = j;
-            if (lower.includes('otdr') && lower.includes('strand')) otdrColIndex = j;
-            if (lower.includes('total') && lower.includes('strand')) totalStrandsColIndex = j;
-            if (lower.includes('testp') && !lower.includes('testpa') && lower.includes('qty')) testpColIndex = j;
-            if (lower.includes('testpa') && lower.includes('qty')) testpaColIndex = j;
-          }
-          if (powerStrandColIndex !== -1 && totalStrandsColIndex !== -1) {
-            headerRowIndex = i;
-            break;
-          }
-        }
+  const cellNumber = (r: number, c: number): number | null => {
+    const v = ws.getCell(r, c).value;
+    if (typeof v === 'number') return v;
+    if (typeof v === 'string') {
+      const n = parseInt(v);
+      return isNaN(n) ? null : n;
+    }
+    return null;
+  };
 
-        if (headerRowIndex === -1 || powerStrandColIndex === -1 || totalStrandsColIndex === -1) {
-          reject(new Error('Could not locate Power Test Strand / Total Strands header columns.'));
-          return;
-        }
+  let headerRowIndex = -1;
+  let powerStrandColIndex = -1;
+  let waldoColIndex = -1;
+  let terminalColIndex = -1;
+  let cableIdColIndex = -1;
+  let otdrColIndex = -1;
+  let totalStrandsColIndex = -1;
+  let testpColIndex = -1;
+  let testpaColIndex = -1;
 
-        const terminals: Terminal[] = [];
-        for (let i = headerRowIndex + 1; i < jsonData.length; i++) {
-          const row = jsonData[i];
-          if (!row) continue;
-          const power = row[powerStrandColIndex];
-          const total = row[totalStrandsColIndex];
-          const powerNum = typeof power === 'number' ? power : parseInt(power);
-          const totalNum = typeof total === 'number' ? total : parseInt(total);
-          if (isNaN(powerNum) || isNaN(totalNum) || powerNum <= 0 || totalNum <= 0) continue;
-          terminals.push({
-            rowIndex: i,
-            waldoId: waldoColIndex !== -1 ? String(row[waldoColIndex] ?? '').trim() : '',
-            terminalName: terminalColIndex !== -1 ? String(row[terminalColIndex] ?? '').trim() : '',
-            cableId: cableIdColIndex !== -1 ? String(row[cableIdColIndex] ?? '').trim() : '',
-            powerTestStrand: powerNum,
-            otdrTestStrand: otdrColIndex !== -1 ? String(row[otdrColIndex] ?? '').trim() : '',
-            totalStrands: totalNum,
-            testpQty: testpColIndex !== -1 ? (row[testpColIndex] ?? '') : '',
-            testpaQty: testpaColIndex !== -1 ? (row[testpaColIndex] ?? '') : '',
-          });
-        }
+  const maxRow = Math.min(50, ws.actualRowCount || ws.rowCount);
+  const maxCol = Math.max(40, ws.actualColumnCount || ws.columnCount);
 
-        resolve({
-          workbook,
-          sheetName,
-          headerRowIndex,
-          powerStrandColIndex,
-          totalStrandsColIndex,
-          terminals,
-        });
-      } catch (err) {
-        reject(err);
-      }
-    };
-    reader.onerror = (err) => reject(err);
-    reader.readAsArrayBuffer(file);
-  });
+  for (let r = 1; r <= maxRow; r++) {
+    for (let c = 1; c <= maxCol; c++) {
+      const cell = ws.getCell(r, c);
+      if (cell.isMerged && cell.master !== cell) continue;
+      const text = cellText(r, c);
+      if (!text) continue;
+      const lower = text.toLowerCase().trim();
+      if (lower.includes('power test strand')) powerStrandColIndex = c - 1;
+      if (lower === 'waldo id' || lower.includes('waldo')) waldoColIndex = c - 1;
+      if (lower === 'terminal') terminalColIndex = c - 1;
+      if (lower === 'cable id' || (lower.includes('cable') && lower.includes('id'))) cableIdColIndex = c - 1;
+      if (lower.includes('otdr') && lower.includes('strand')) otdrColIndex = c - 1;
+      if (lower.includes('total') && lower.includes('strand')) totalStrandsColIndex = c - 1;
+      if (lower.includes('testp') && !lower.includes('testpa') && lower.includes('qty')) testpColIndex = c - 1;
+      if (lower.includes('testpa') && lower.includes('qty')) testpaColIndex = c - 1;
+    }
+    if (powerStrandColIndex !== -1 && totalStrandsColIndex !== -1) {
+      headerRowIndex = r - 1;
+      break;
+    }
+  }
+
+  if (headerRowIndex === -1 || powerStrandColIndex === -1 || totalStrandsColIndex === -1) {
+    throw new Error('Could not locate Power Test Strand / Total Strands header columns.');
+  }
+
+  const terminals: Terminal[] = [];
+  const lastRow = Math.max(ws.rowCount, ws.actualRowCount, 0);
+  for (let r = headerRowIndex + 2; r <= lastRow; r++) {
+    const powerCell = ws.getCell(r, powerStrandColIndex + 1);
+    if (powerCell.isMerged && powerCell.master !== powerCell) continue;
+    const power = cellNumber(r, powerStrandColIndex + 1);
+    const total = cellNumber(r, totalStrandsColIndex + 1);
+    if (power === null || total === null || power <= 0 || total <= 0) continue;
+    terminals.push({
+      rowIndex: r - 1,
+      waldoId: waldoColIndex !== -1 ? cellText(r, waldoColIndex + 1) : '',
+      terminalName: terminalColIndex !== -1 ? cellText(r, terminalColIndex + 1) : '',
+      cableId: cableIdColIndex !== -1 ? cellText(r, cableIdColIndex + 1) : '',
+      powerTestStrand: power,
+      otdrTestStrand: otdrColIndex !== -1 ? cellText(r, otdrColIndex + 1) : '',
+      totalStrands: total,
+      testpQty: testpColIndex !== -1 ? (cellNumber(r, testpColIndex + 1) ?? cellText(r, testpColIndex + 1)) : '',
+      testpaQty: testpaColIndex !== -1 ? (cellNumber(r, testpaColIndex + 1) ?? cellText(r, testpaColIndex + 1)) : '',
+    });
+  }
+
+  return {
+    fileBuffer: arrayBuffer,
+    sheetName: ws.name,
+    headerRowIndex,
+    powerStrandColIndex,
+    totalStrandsColIndex,
+    terminals,
+  };
 }
 
 export function computeStaggeredColumns(terminals: Terminal[]): Terminal[] {
@@ -509,36 +521,46 @@ export function computeStaggeredColumns(terminals: Terminal[]): Terminal[] {
   });
 }
 
-export function generateConvertedXlsx(
+export async function generateConvertedXlsx(
   parsed: ParsedWorkbook,
   terminals: Terminal[],
   portColIndex = 38,
   strandColIndex = 39
-): Uint8Array {
-  const { workbook, sheetName, headerRowIndex } = parsed;
-  const sheet = workbook.Sheets[sheetName];
+): Promise<Uint8Array> {
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(parsed.fileBuffer);
+  const ws = wb.getWorksheet(parsed.sheetName) ?? wb.worksheets[0];
 
-  const portHeaderAddr = XLSX.utils.encode_cell({ r: headerRowIndex, c: portColIndex });
-  const strandHeaderAddr = XLSX.utils.encode_cell({ r: headerRowIndex, c: strandColIndex });
-  sheet[portHeaderAddr] = { v: 'Staggered Port', t: 's' };
-  sheet[strandHeaderAddr] = { v: 'Staggered Strand', t: 's' };
+  const portCol = portColIndex + 1;
+  const strandCol = strandColIndex + 1;
+  const headerRow = parsed.headerRowIndex + 1;
+
+  const headerTemplate = ws.getCell(headerRow, parsed.powerStrandColIndex + 1);
+
+  const writeHeader = (col: number, value: string) => {
+    const cell = ws.getCell(headerRow, col);
+    cell.value = value;
+    if (headerTemplate.style) cell.style = JSON.parse(JSON.stringify(headerTemplate.style));
+  };
+  writeHeader(portCol, 'Staggered Port');
+  writeHeader(strandCol, 'Staggered Strand');
 
   for (const t of terminals) {
     if (t.staggeredPort === undefined || t.staggeredStrand === undefined) continue;
-    const portAddr = XLSX.utils.encode_cell({ r: t.rowIndex, c: portColIndex });
-    const strandAddr = XLSX.utils.encode_cell({ r: t.rowIndex, c: strandColIndex });
-    sheet[portAddr] = { v: t.staggeredPort, t: 'n' };
-    sheet[strandAddr] = { v: t.staggeredStrand, t: 'n' };
+    const dataTemplate = ws.getCell(t.rowIndex + 1, parsed.powerStrandColIndex + 1);
+    const portCell = ws.getCell(t.rowIndex + 1, portCol);
+    const strandCell = ws.getCell(t.rowIndex + 1, strandCol);
+    portCell.value = t.staggeredPort;
+    strandCell.value = t.staggeredStrand;
+    if (dataTemplate.style) {
+      portCell.style = JSON.parse(JSON.stringify(dataTemplate.style));
+      strandCell.style = JSON.parse(JSON.stringify(dataTemplate.style));
+    }
   }
 
-  const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1');
-  if (range.e.c < strandColIndex) range.e.c = strandColIndex;
-  if (range.e.r < headerRowIndex) range.e.r = headerRowIndex;
-  for (const t of terminals) {
-    if (range.e.r < t.rowIndex) range.e.r = t.rowIndex;
-  }
-  sheet['!ref'] = XLSX.utils.encode_range(range);
+  ws.getColumn(portCol).width = 14;
+  ws.getColumn(strandCol).width = 16;
 
-  const out = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' });
-  return new Uint8Array(out);
+  const buf = await wb.xlsx.writeBuffer();
+  return new Uint8Array(buf as ArrayBuffer);
 }
