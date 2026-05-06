@@ -5,10 +5,26 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
-import { parseExcelFile, generateReport } from "@/lib/excel";
+import {
+  parseExcelFile,
+  generateReport,
+  parseTerminals,
+  computeStaggeredColumns,
+  generateConvertedXlsx,
+  Terminal,
+  ParsedWorkbook,
+} from "@/lib/excel";
 import { AppToggle } from "@/components/app-toggle";
-import { Download, FileJson, Copy, Save } from "lucide-react";
+import { Download, FileJson, Copy, Save, FileSpreadsheet } from "lucide-react";
 
 export default function Home() {
   const { toast } = useToast();
@@ -22,6 +38,8 @@ export default function Home() {
   const [jsonOutput, setJsonOutput] = useState<string>("");
   const [isProcessing, setIsProcessing] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [parsedWorkbook, setParsedWorkbook] = useState<ParsedWorkbook | null>(null);
+  const [staggeredTerminals, setStaggeredTerminals] = useState<Terminal[]>([]);
 
   useEffect(() => {
     const handler = (e: any) => {
@@ -47,8 +65,8 @@ export default function Home() {
   useEffect(() => {
     if (file) {
       setIsProcessing(true);
-      parseExcelFile(file)
-        .then((data) => {
+      Promise.all([parseExcelFile(file), parseTerminals(file).catch(() => null)])
+        .then(([data, parsed]) => {
           if (data.cableId) setCableId(data.cableId);
           if (data.cfas) setCfas(data.cfas);
           if (data.strands.length > 0) {
@@ -63,6 +81,14 @@ export default function Home() {
               title: "No Data Found",
               description: "Could not find strand data in the uploaded file.",
             });
+          }
+          if (parsed && parsed.terminals.length > 0) {
+            const withStaggered = computeStaggeredColumns(parsed.terminals);
+            setParsedWorkbook(parsed);
+            setStaggeredTerminals(withStaggered);
+          } else {
+            setParsedWorkbook(null);
+            setStaggeredTerminals([]);
           }
         })
         .catch((err) => {
@@ -123,6 +149,36 @@ export default function Home() {
       title: "Copied to Clipboard",
       description: "You can paste it anywhere now.",
     });
+  };
+
+  const handleDownloadConverted = () => {
+    if (!parsedWorkbook || staggeredTerminals.length === 0) return;
+    try {
+      const bytes = generateConvertedXlsx(parsedWorkbook, staggeredTerminals);
+      const blob = new Blob([bytes], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const baseName = file?.name.replace(/\.xlsx$/i, "") || "PONSHEET";
+      a.href = url;
+      a.download = `${baseName}_staggered.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast({
+        title: "Spreadsheet Downloaded",
+        description: "Converted file with staggered columns saved.",
+      });
+    } catch (e) {
+      console.error(e);
+      toast({
+        variant: "destructive",
+        title: "Error Generating Spreadsheet",
+        description: "Could not build the converted file.",
+      });
+    }
   };
 
   return (
@@ -300,6 +356,70 @@ export default function Home() {
           </div>
 
         </div>
+
+        {/* Step 4: Spreadsheet Preview */}
+        <Card className="border-border/50 bg-card/50 backdrop-blur-sm shadow-lg overflow-hidden">
+          <CardHeader className="pb-3 border-b border-border/50 bg-secondary/10">
+            <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded bg-primary/20 flex items-center justify-center text-primary text-xs font-bold">4</div>
+                  Spreadsheet Preview
+                </CardTitle>
+                <CardDescription className="mt-1">
+                  Original terminals with generated Staggered Port and Staggered Strand columns.
+                </CardDescription>
+              </div>
+              <Button
+                onClick={handleDownloadConverted}
+                size="sm"
+                className="h-8 text-xs gap-1.5"
+                disabled={staggeredTerminals.length === 0}
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5" /> Download XLSX
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="p-0">
+            {staggeredTerminals.length > 0 ? (
+              <div className="max-h-[500px] overflow-auto">
+                <Table className="font-mono text-xs">
+                  <TableHeader className="sticky top-0 bg-secondary/40 backdrop-blur-sm z-10">
+                    <TableRow>
+                      <TableHead>Waldo ID</TableHead>
+                      <TableHead>Terminal</TableHead>
+                      <TableHead>Cable ID</TableHead>
+                      <TableHead className="text-right">Power Test</TableHead>
+                      <TableHead>OTDR Test</TableHead>
+                      <TableHead className="text-right">Total Strands</TableHead>
+                      <TableHead className="text-right text-primary">Staggered Port</TableHead>
+                      <TableHead className="text-right text-primary">Staggered Strand</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {staggeredTerminals.map((t) => (
+                      <TableRow key={t.rowIndex}>
+                        <TableCell>{t.waldoId}</TableCell>
+                        <TableCell className="whitespace-nowrap">{t.terminalName}</TableCell>
+                        <TableCell>{t.cableId}</TableCell>
+                        <TableCell className="text-right">{t.powerTestStrand}</TableCell>
+                        <TableCell>{t.otdrTestStrand}</TableCell>
+                        <TableCell className="text-right">{t.totalStrands}</TableCell>
+                        <TableCell className="text-right text-primary font-bold">{t.staggeredPort}</TableCell>
+                        <TableCell className="text-right text-primary font-bold">{t.staggeredStrand}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center text-muted-foreground py-16 opacity-50">
+                <FileSpreadsheet className="w-12 h-12 mb-2" />
+                <p>Upload a PON sheet to preview staggered columns</p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
     </div>
   );
