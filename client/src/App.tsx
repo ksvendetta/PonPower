@@ -9,7 +9,8 @@ import Iolm from "@/pages/iolm";
 import Exfo from "@/pages/exfo";
 import { PasswordGate } from "@/components/password-gate";
 
-const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+// In dev the app is served from / regardless of BASE_URL (set to /PonPower/ for GH Pages prod).
+const base = import.meta.env.DEV ? "" : import.meta.env.BASE_URL.replace(/\/$/, "");
 
 function Router() {
   return (
