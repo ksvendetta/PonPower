@@ -33,9 +33,10 @@ import {
 import {
   GeocodeHit, loadGeocodeCache, renderEmbeddedMap, autoResolveCity,
   drawConnections, clearConnections, flashPonOnMap, buildOpenInNewTabHtml,
+  buildShareData, buildMapViewerUrl,
 } from "@/lib/exfo-maps";
 import { AppToggle } from "@/components/app-toggle";
-import { Download, FileJson, Copy, Save, FileSpreadsheet, Settings, MapPin, ExternalLink, Search } from "lucide-react";
+import { Download, FileJson, Copy, Save, FileSpreadsheet, Settings, MapPin, ExternalLink, Search, Share2 } from "lucide-react";
 
 const API_KEY_STORAGE = "f2job.gmapsApiKey";
 const API_KEY_SEEDED = "f2job.gmapsApiKey.seeded";
@@ -68,6 +69,9 @@ export default function Home() {
   const [distances, setDistances] = useState<Map<number, number>>(new Map());
   const [showConnections, setShowConnections] = useState(false);
   const [ponSearch, setPonSearch] = useState("");
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [shareDialogOpen, setShareDialogOpen] = useState(false);
+  const [sharing, setSharing] = useState(false);
   const mapCanvasRef = useRef<HTMLDivElement>(null);
   const mapStateRef = useRef<{
     gmap: any | null; gmarkers: any[]; connections: any[]; showConnections: boolean;
@@ -273,6 +277,44 @@ export default function Home() {
     } catch (e: any) {
       setMapStatus(e?.message || String(e));
       setMapStatusKind("err");
+    }
+  };
+
+  const handleShareLink = async () => {
+    if (!apiKey.trim() || !parsedExfo) {
+      setMapStatus("API key required — set it in Settings.");
+      setMapStatusKind("err");
+      return;
+    }
+    if (!mapLoaded) {
+      setMapStatus("Load the map before sharing.");
+      setMapStatusKind("err");
+      return;
+    }
+    setSharing(true);
+    try {
+      const data = buildShareData(
+        parsedExfo.project || cableId || "Terminal map",
+        parsedExfo.pfpName,
+        pfpLocation,
+        city.trim(),
+        parsedExfo.terminals,
+        geocodeCacheRef.current,
+        showConnections,
+      );
+      const url = buildMapViewerUrl(apiKey.trim(), data);
+      setShareUrl(url);
+      setShareDialogOpen(true);
+      try { await navigator.clipboard.writeText(url); } catch (_) {}
+      toast({
+        title: "Share link copied",
+        description: "Direct link to the map — paste anywhere.",
+      });
+    } catch (e: any) {
+      setMapStatus(e?.message || "Could not build share link.");
+      setMapStatusKind("err");
+    } finally {
+      setSharing(false);
     }
   };
 
@@ -644,6 +686,9 @@ export default function Home() {
                 <Button onClick={handleOpenMapInNewTab} variant="outline" size="sm" className="gap-1.5" disabled={!mapLoaded}>
                   <ExternalLink className="w-3.5 h-3.5" /> Open map in new tab
                 </Button>
+                <Button onClick={handleShareLink} variant="outline" size="sm" className="gap-1.5" disabled={!mapLoaded || sharing}>
+                  <Share2 className="w-3.5 h-3.5" /> {sharing ? "Building link…" : "Share link"}
+                </Button>
                 <label className="flex items-center gap-2 text-xs cursor-pointer">
                   <Switch checked={showConnections} onCheckedChange={setShowConnections} />
                   Connect pins by strand order
@@ -743,6 +788,38 @@ export default function Home() {
           </div>
           <DialogFooter>
             <Button onClick={() => setShowSettings(false)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={shareDialogOpen} onOpenChange={setShareDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Share Terminal map</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              Anyone with this link can open the map. The URL embeds your Google Maps API key —
+              restrict it by HTTP referrer in Google Cloud Console for safety.
+            </p>
+            <div className="flex gap-2">
+              <Input value={shareUrl ?? ""} readOnly onFocus={e => e.currentTarget.select()} className="font-mono text-xs" />
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  if (shareUrl) {
+                    navigator.clipboard.writeText(shareUrl);
+                    toast({ title: "Copied", description: "Link copied to clipboard." });
+                  }
+                }}
+              >
+                <Copy className="w-3.5 h-3.5" />
+              </Button>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button onClick={() => setShareDialogOpen(false)}>Close</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

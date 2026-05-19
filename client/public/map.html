@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>Terminal map</title>
+<style>
+  html, body, #map { height: 100%; margin: 0; padding: 0; }
+  .legend { position: absolute; top: 10px; left: 10px; z-index: 5; background: rgba(255,255,255,0.95); padding: 8px 12px; font: 12px -apple-system, "Segoe UI", Roboto, sans-serif; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.2); color: #222; max-width: 280px; }
+  .legend .sw { display: inline-block; width: 10px; height: 10px; margin-right: 4px; border-radius: 50%; vertical-align: middle; }
+  .legend label { display: flex; align-items: center; gap: 6px; margin-top: 8px; cursor: pointer; user-select: none; }
+  .legend label input { margin: 0; }
+  .fatal { padding: 16px; font: 14px -apple-system, "Segoe UI", Roboto, sans-serif; background: #ffebee; color: #b71c1c; }
+</style>
+</head>
+<body>
+<div id="boot" class="fatal" style="display:none">Loading map…</div>
+<div id="legend" class="legend" style="display:none">
+  <div><span class="sw" style="background:#d32f2f"></span> PFP (starting point)</div>
+  <div style="margin-top:6px; font-weight:600;">Terminal (Pon count)</div>
+  <div style="display:grid; grid-template-columns:auto auto; gap:2px 10px; margin-top:2px;">
+    <div><span class="sw" style="background:#2962ff"></span>1-99</div>
+    <div><span class="sw" style="background:#ff6f00"></span>100-199</div>
+    <div><span class="sw" style="background:#2e7d32"></span>200-299</div>
+    <div><span class="sw" style="background:#6d4c41"></span>300-399</div>
+    <div><span class="sw" style="background:#607d8b"></span>400-499</div>
+    <div><span class="sw" style="background:#ffffff; border:1px solid #bbb;"></span>500-599</div>
+    <div><span class="sw" style="background:#d32f2f"></span>600-699</div>
+    <div><span class="sw" style="background:#212121"></span>700-799</div>
+    <div><span class="sw" style="background:#fbc02d"></span>800-899</div>
+    <div><span class="sw" style="background:#8e24aa"></span>900-999</div>
+  </div>
+  <div id="termCount" style="margin-top:4px; color:#666;"></div>
+  <label><input type="checkbox" id="connToggle"/> Connect pins by strand order</label>
+  <div style="margin-top:6px; display:flex; gap:6px; align-items:center;">
+    <input type="number" id="ponSearch" placeholder="Find Pon count" min="0" style="flex:1; width:110px; padding:3px 6px; font:12px inherit; border:1px solid #bbb; border-radius:4px;" />
+    <button id="ponSearchBtn" style="padding:3px 8px; font:12px inherit; border:1px solid #bbb; border-radius:4px; background:#eee; cursor:pointer;">Flash</button>
+  </div>
+  <div id="ponSearchStatus" style="margin-top:4px; color:#666; font-size:11px; min-height:14px;"></div>
+</div>
+<div id="map" style="display:none"></div>
+<script src="https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js"></script>
+<script>
+  function fail(msg) {
+    var b = document.getElementById('boot');
+    b.style.display = 'block';
+    b.textContent = msg;
+  }
+  function parseHash() {
+    var h = (location.hash || '').replace(/^#/, '');
+    var out = {};
+    h.split('&').forEach(function (p) {
+      var eq = p.indexOf('=');
+      if (eq < 0) return;
+      out[decodeURIComponent(p.slice(0, eq))] = decodeURIComponent(p.slice(eq + 1));
+    });
+    return out;
+  }
+  var params = parseHash();
+  if (!params.d || !params.k) {
+    fail('Missing data in URL. This link is incomplete.');
+    throw new Error('missing params');
+  }
+  var DATA;
+  try {
+    var json = LZString.decompressFromEncodedURIComponent(params.d);
+    if (!json) throw new Error('empty');
+    DATA = JSON.parse(json);
+  } catch (e) {
+    fail('Could not decode map data: ' + (e && e.message || e));
+    throw e;
+  }
+  var PFP = DATA.pfp || null;
+  var TERMS = Array.isArray(DATA.terms) ? DATA.terms : [];
+  var SHOW_CONN = !!DATA.connect;
+  var TITLE = DATA.title || 'Terminal map';
+  document.title = TITLE + ' — Terminal map';
+  document.getElementById('termCount').textContent =
+    TERMS.length + ' terminals' + (PFP ? ' — from ' + PFP.addr : '');
+  document.getElementById('connToggle').checked = SHOW_CONN;
+
+  var TERM_ICONS = {};
+  function pfpIcon() {
+    var w=40,h=28,pad=2,rx=7,rectW=w-pad*2,rectH=h-pad*2;
+    var svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+w+'" height="'+h+'" viewBox="0 0 '+w+' '+h+'"><defs><filter id="pfpShadow" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="1.5" stdDeviation="2" flood-color="#000" flood-opacity="0.55"/></filter></defs><g filter="url(#pfpShadow)"><rect x="0" y="0" width="'+w+'" height="'+h+'" rx="'+(rx+1)+'" fill="#ffffff"/><rect x="'+pad+'" y="'+pad+'" width="'+rectW+'" height="'+rectH+'" rx="'+rx+'" fill="#d32f2f" stroke="#7a0000" stroke-width="1"/></g><text x="'+(w/2)+'" y="'+(h-8)+'" text-anchor="middle" font-family="Arial,sans-serif" font-size="15" font-weight="900" fill="white" stroke="#7a0000" stroke-width="0.4" paint-order="stroke fill">PFP</text></svg>';
+    return { url:'data:image/svg+xml;charset=UTF-8,'+encodeURIComponent(svg), anchor:new google.maps.Point(w/2,h/2), scaledSize:new google.maps.Size(w,h) };
+  }
+  var PON_BUCKET_COLORS=['#2962ff','#ff6f00','#2e7d32','#6d4c41','#607d8b','#ffffff','#d32f2f','#212121','#fbc02d','#8e24aa'];
+  var PON_LIGHT_BUCKETS={5:1,8:1};
+  function ponBucketWeights(label){var w=[0,0,0,0,0,0,0,0,0,0];if(!label)return w;var s=String(label).split(',');for(var si=0;si<s.length;si++){var m=s[si].trim().match(/^(\d+)(?:-(\d+))?$/);if(!m)continue;var a=parseInt(m[1],10),b=m[2]!=null?parseInt(m[2],10):a;if(isNaN(a)||isNaN(b))continue;var lo=Math.min(a,b),hi=Math.max(a,b);for(var n=lo;n<=hi;n++){var idx=Math.floor(n/100);if(idx<0)idx=0;else if(idx>=w.length)idx=w.length-1;w[idx]+=1;}}return w;}
+  function terminalIcon(label){if(TERM_ICONS[label])return TERM_ICONS[label];var w=Math.max(28,10+String(label).length*7),h=22,iX=0.75,iY=0.75,iW=w-1.5,iH=h-1.5,rx=6;var weights=ponBucketWeights(label),total=0;for(var i=0;i<weights.length;i++)total+=weights[i];var body;if(total===0){body='<rect x="'+iX+'" y="'+iY+'" width="'+iW+'" height="'+iH+'" rx="'+rx+'" fill="'+PON_BUCKET_COLORS[0]+'"/>';}else{var parts='',x=iX;for(var j=0;j<weights.length;j++){if(!weights[j])continue;var sw=(weights[j]/total)*iW;parts+='<rect x="'+x+'" y="'+iY+'" width="'+sw+'" height="'+iH+'" fill="'+PON_BUCKET_COLORS[j]+'"/>';x+=sw;}body='<defs><clipPath id="ponClip"><rect x="'+iX+'" y="'+iY+'" width="'+iW+'" height="'+iH+'" rx="'+rx+'"/></clipPath></defs><g clip-path="url(#ponClip)">'+parts+'</g>';}body+='<rect x="'+iX+'" y="'+iY+'" width="'+iW+'" height="'+iH+'" rx="'+rx+'" fill="none" stroke="white" stroke-width="1.5"/>';var dI=0,dV=-1;for(var k=0;k<weights.length;k++)if(weights[k]>dV){dV=weights[k];dI=k;}var tF=PON_LIGHT_BUCKETS[dI]?'#000':'#fff';var svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+w+'" height="'+h+'" viewBox="0 0 '+w+' '+h+'">'+body+'<text x="'+(w/2)+'" y="'+(h-6)+'" text-anchor="middle" font-family="Arial,sans-serif" font-size="12" font-weight="bold" fill="'+tF+'">'+label+'</text></svg>';TERM_ICONS[label]={url:'data:image/svg+xml;charset=UTF-8,'+encodeURIComponent(svg),anchor:new google.maps.Point(w/2,h/2),scaledSize:new google.maps.Size(w,h)};return TERM_ICONS[label];}
+  var MAP=null;var LINES=[];function clearLines(){for(var i=0;i<LINES.length;i++)LINES[i].setMap(null);LINES.length=0;}
+  function drawLines(){clearLines();if(!MAP)return;var ord=TERMS.slice().sort(function(a,b){return a.minStrand-b.minStrand;});var prev=null;for(var i=0;i<ord.length;i++){var t=ord[i];var pos=new google.maps.LatLng(t.lat,t.lng);if(prev){LINES.push(new google.maps.Polyline({path:[prev,pos],geodesic:true,strokeColor:'#ff6f00',strokeOpacity:0.9,strokeWeight:3,icons:[{icon:{path:google.maps.SymbolPath.FORWARD_CLOSED_ARROW,scale:4,strokeColor:'#ff6f00',fillColor:'#ff6f00',fillOpacity:1},offset:'92%'}],map:MAP}));}prev=pos;}}
+  function initMap(){
+    document.getElementById('boot').style.display='none';
+    document.getElementById('legend').style.display='block';
+    document.getElementById('map').style.display='block';
+    var center=PFP?{lat:PFP.lat,lng:PFP.lng}:(TERMS[0]?{lat:TERMS[0].lat,lng:TERMS[0].lng}:{lat:0,lng:0});
+    MAP=new google.maps.Map(document.getElementById('map'),{zoom:12,center:center});
+    var bounds=new google.maps.LatLngBounds();
+    if(PFP){var pm=new google.maps.Marker({map:MAP,position:{lat:PFP.lat,lng:PFP.lng},icon:pfpIcon(),title:PFP.name+'\n'+PFP.addr,zIndex:999999});bounds.extend(pm.getPosition());var pinfo=new google.maps.InfoWindow({content:'<b>PFP (starting point)</b><br>'+PFP.name+'<br>'+PFP.addr});pm.addListener('click',function(){pinfo.open({anchor:pm,map:MAP});});}
+    var TERM_MARKERS=[];
+    for(var i=0;i<TERMS.length;i++){(function(t){var m=new google.maps.Marker({map:MAP,position:{lat:t.lat,lng:t.lng},icon:terminalIcon(t.strands),title:t.name});m._strandNums=Array.isArray(t.strandNums)?t.strandNums:[];TERM_MARKERS.push(m);bounds.extend(m.getPosition());var info=new google.maps.InfoWindow({content:'<b>'+t.name+'</b><br>'+t.addr+'<br>Strands: '+t.strands+(t.waldo?'<br>Waldo: '+t.waldo:'')+(t.dist?'<br>Distance from PFP: '+t.dist:'')});m.addListener('click',function(){info.open({anchor:m,map:MAP});});})(TERMS[i]);}
+    if(!bounds.isEmpty())MAP.fitBounds(bounds,40);
+    var tg=document.getElementById('connToggle');tg.addEventListener('change',function(){if(tg.checked)drawLines();else clearLines();});
+    if(tg.checked)drawLines();
+    var sI=document.getElementById('ponSearch'),sB=document.getElementById('ponSearchBtn'),sS=document.getElementById('ponSearchStatus');
+    function flashPon(){var raw=(sI.value||'').trim();if(!raw)return;var n=parseInt(raw,10);if(isNaN(n)){sS.textContent='Enter a numeric Pon count.';sS.style.color='#b71c1c';return;}var matches=TERM_MARKERS.filter(function(mk){return mk._strandNums&&mk._strandNums.indexOf(n)!==-1;});if(!matches.length){sS.textContent='No terminal contains Pon count '+n+'.';sS.style.color='#b71c1c';return;}MAP.panTo(matches[0].getPosition());matches.forEach(function(mk){mk.setAnimation(google.maps.Animation.BOUNCE);});setTimeout(function(){matches.forEach(function(mk){mk.setAnimation(null);});},3000);sS.textContent='Flashing '+matches.length+' terminal'+(matches.length>1?'s':'')+' with Pon count '+n+'.';sS.style.color='#1b5e20';}
+    sB.addEventListener('click',flashPon);
+    sI.addEventListener('keydown',function(e){if(e.key==='Enter')flashPon();});
+  }
+  window.initMap = initMap;
+  window.gm_authFailure = function(){ fail('Google Maps rejected the API key for this domain.'); };
+  document.getElementById('boot').style.display='block';
+  document.getElementById('boot').textContent='Loading map…';
+  var s = document.createElement('script');
+  s.src = 'https://maps.googleapis.com/maps/api/js?key=' + encodeURIComponent(params.k) + '&callback=initMap';
+  s.async = true; s.defer = true;
+  document.head.appendChild(s);
+</script>
+</body>
+</html>

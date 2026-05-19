@@ -1,3 +1,4 @@
+import { compressToEncodedURIComponent } from 'lz-string';
 import { manhattanFeet, parseAddress, terminalStrandNumbers, terminalStrandRange, ExfoTerminal, resolveCityFromCLLI } from './exfo';
 
 declare global {
@@ -714,3 +715,54 @@ export function buildOpenInNewTabHtml(
 <script src="https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&callback=initMap" async defer><\/script>
 </body></html>`;
 }
+
+interface ShareTerm {
+  name: string; addr: string; waldo: string;
+  lat: number; lng: number;
+  strands: string; strandNums: number[]; minStrand: number;
+  dist: string | null;
+}
+
+export function buildShareData(
+  title: string,
+  pfpName: string | null,
+  pfpLocation: GeocodeHit | null,
+  city: string,
+  terminals: ExfoTerminal[],
+  cache: Map<string, GeocodeHit>,
+  showConnections: boolean,
+): { title: string; pfp: any; terms: ShareTerm[]; connect: boolean } {
+  const buildQuery = (addr: string) => city ? `${addr}, ${city}` : addr;
+  const terms = terminals.map(t => {
+    const addr = parseAddress(t.terminal);
+    const loc = cache.get(buildQuery(addr));
+    if (!loc) return null;
+    const distFt = pfpLocation ? manhattanFeet(pfpLocation, loc) : null;
+    const nums = terminalStrandNumbers(t);
+    return {
+      name: t.terminal, addr, waldo: t.waldo || '',
+      lat: loc.lat, lng: loc.lng,
+      strands: terminalStrandRange(t),
+      strandNums: nums,
+      minStrand: nums.length ? nums[0] : Number.POSITIVE_INFINITY,
+      dist: distFt != null ? `${Math.round(distFt).toLocaleString()} ft` : null,
+    } as ShareTerm;
+  }).filter(Boolean) as ShareTerm[];
+  const pfp = pfpName && pfpLocation ? {
+    name: pfpName, addr: parseAddress(pfpName),
+    lat: pfpLocation.lat, lng: pfpLocation.lng,
+  } : null;
+  return { title, pfp, terms, connect: showConnections };
+}
+
+// Always point share links at the deployed site so localhost dev links work for recipients.
+const PUBLIC_VIEWER_BASE = 'https://ksvendetta.github.io/PonPower';
+
+export function buildMapViewerUrl(
+  apiKey: string,
+  data: ReturnType<typeof buildShareData>,
+): string {
+  const compressed = compressToEncodedURIComponent(JSON.stringify(data));
+  return `${PUBLIC_VIEWER_BASE}/map.html#k=${encodeURIComponent(apiKey)}&d=${compressed}`;
+}
+
