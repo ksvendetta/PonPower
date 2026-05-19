@@ -755,14 +755,44 @@ export function buildShareData(
   return { title, pfp, terms, connect: showConnections };
 }
 
-// Always point share links at the deployed site so localhost dev links work for recipients.
-const PUBLIC_VIEWER_BASE = 'https://ksvendetta.github.io/PonPower';
+// Origin for share links. In dev this is localhost (recipient can't open, but the flow works);
+// in prod it's whatever domain serves the app (e.g. https://www.agenticpropertyos.com).
+function viewerOrigin(): string {
+  return window.location.origin;
+}
 
-export function buildMapViewerUrl(
+function longFormUrl(apiKey: string, data: ReturnType<typeof buildShareData>): string {
+  const compressed = compressToEncodedURIComponent(JSON.stringify(data));
+  return `${viewerOrigin()}/map.html#k=${encodeURIComponent(apiKey)}&d=${compressed}`;
+}
+
+// Tries the /api/share endpoint for a short ID-style URL.
+// Falls back to the long-form fragment URL if the server is unavailable.
+export async function buildMapViewerUrl(
   apiKey: string,
   data: ReturnType<typeof buildShareData>,
-): string {
+): Promise<string> {
   const compressed = compressToEncodedURIComponent(JSON.stringify(data));
-  return `${PUBLIC_VIEWER_BASE}/map.html#k=${encodeURIComponent(apiKey)}&d=${compressed}`;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 8000);
+  try {
+    const r = await fetch('/api/share', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ k: apiKey, d: compressed }),
+      signal: ctl.signal,
+    });
+    if (r.ok) {
+      const j = await r.json();
+      if (j && typeof j.id === 'string' && /^[A-Za-z0-9]{4,32}$/.test(j.id)) {
+        return `${viewerOrigin()}/map.html?id=${j.id}`;
+      }
+    }
+  } catch (_) {
+    // fall through to long-form
+  } finally {
+    clearTimeout(timer);
+  }
+  return longFormUrl(apiKey, data);
 }
 

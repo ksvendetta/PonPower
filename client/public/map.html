@@ -46,38 +46,70 @@
     b.style.display = 'block';
     b.textContent = msg;
   }
-  function parseHash() {
-    var h = (location.hash || '').replace(/^#/, '');
+  function parseKV(src) {
     var out = {};
-    h.split('&').forEach(function (p) {
+    src.split('&').forEach(function (p) {
       var eq = p.indexOf('=');
       if (eq < 0) return;
       out[decodeURIComponent(p.slice(0, eq))] = decodeURIComponent(p.slice(eq + 1));
     });
     return out;
   }
-  var params = parseHash();
-  if (!params.d || !params.k) {
-    fail('Missing data in URL. This link is incomplete.');
-    throw new Error('missing params');
+  var hashParams = parseKV((location.hash || '').replace(/^#/, ''));
+  var queryParams = parseKV((location.search || '').replace(/^\?/, ''));
+  var shareId = queryParams.id || hashParams.id || null;
+
+  function decode(k, d) {
+    if (!d || !k) {
+      fail('Missing data in URL. This link is incomplete.');
+      throw new Error('missing params');
+    }
+    var json = LZString.decompressFromEncodedURIComponent(d);
+    if (!json) {
+      fail('Could not decode map data.');
+      throw new Error('decompress failed');
+    }
+    var data = JSON.parse(json);
+    boot(k, data);
   }
-  var DATA;
-  try {
-    var json = LZString.decompressFromEncodedURIComponent(params.d);
-    if (!json) throw new Error('empty');
-    DATA = JSON.parse(json);
-  } catch (e) {
-    fail('Could not decode map data: ' + (e && e.message || e));
-    throw e;
+
+  var BOOTED = false;
+  function boot(apiKey, data) {
+    if (BOOTED) return;
+    BOOTED = true;
+    window.__MAP_API_KEY = apiKey;
+    window.__MAP_DATA = data;
+    PFP = data.pfp || null;
+    TERMS = Array.isArray(data.terms) ? data.terms : [];
+    SHOW_CONN = !!data.connect;
+    TITLE = data.title || 'Terminal map';
+    document.title = TITLE + ' — Terminal map';
+    document.getElementById('termCount').textContent =
+      TERMS.length + ' terminals' + (PFP ? ' — from ' + PFP.addr : '');
+    document.getElementById('connToggle').checked = SHOW_CONN;
+    var s = document.createElement('script');
+    s.src = 'https://maps.googleapis.com/maps/api/js?key=' + encodeURIComponent(apiKey) + '&callback=initMap';
+    s.async = true; s.defer = true;
+    document.head.appendChild(s);
   }
-  var PFP = DATA.pfp || null;
-  var TERMS = Array.isArray(DATA.terms) ? DATA.terms : [];
-  var SHOW_CONN = !!DATA.connect;
-  var TITLE = DATA.title || 'Terminal map';
-  document.title = TITLE + ' — Terminal map';
-  document.getElementById('termCount').textContent =
-    TERMS.length + ' terminals' + (PFP ? ' — from ' + PFP.addr : '');
-  document.getElementById('connToggle').checked = SHOW_CONN;
+
+  var PFP = null, TERMS = [], SHOW_CONN = false, TITLE = '';
+
+  if (shareId) {
+    if (!/^[A-Za-z0-9]{4,32}$/.test(shareId)) {
+      fail('Invalid share id.');
+      throw new Error('bad id');
+    }
+    fetch('/api/share?id=' + encodeURIComponent(shareId))
+      .then(function (r) {
+        if (!r.ok) throw new Error(r.status === 404 ? 'Share not found (it may have been deleted).' : 'Server returned ' + r.status);
+        return r.json();
+      })
+      .then(function (j) { decode(j.k, j.d); })
+      .catch(function (e) { fail('Could not load shared map: ' + (e && e.message || e)); });
+  } else {
+    decode(hashParams.k, hashParams.d);
+  }
 
   var TERM_ICONS = {};
   function pfpIcon() {
@@ -113,10 +145,6 @@
   window.gm_authFailure = function(){ fail('Google Maps rejected the API key for this domain.'); };
   document.getElementById('boot').style.display='block';
   document.getElementById('boot').textContent='Loading map…';
-  var s = document.createElement('script');
-  s.src = 'https://maps.googleapis.com/maps/api/js?key=' + encodeURIComponent(params.k) + '&callback=initMap';
-  s.async = true; s.defer = true;
-  document.head.appendChild(s);
 </script>
 </body>
 </html>

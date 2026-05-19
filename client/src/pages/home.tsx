@@ -302,7 +302,7 @@ export default function Home() {
         geocodeCacheRef.current,
         showConnections,
       );
-      const url = buildMapViewerUrl(apiKey.trim(), data);
+      const url = await buildMapViewerUrl(apiKey.trim(), data);
       setShareUrl(url);
       setShareDialogOpen(true);
       try { await navigator.clipboard.writeText(url); } catch (_) {}
