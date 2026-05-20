@@ -37,6 +37,21 @@ import {
   drawConnections, clearConnections, flashPonOnMap, buildOpenInNewTabHtml,
   buildShareData, buildMapViewerUrl,
 } from "@/lib/exfo-maps";
+import QRCode from "qrcode";
+
+// QR version 40 at error-correction level M holds 2,331 alphanumeric / 1,852 byte chars.
+// URLs are encoded in byte mode, so cap below that with a small safety margin.
+const QR_URL_MAX_LEN = 1800;
+
+async function tryBuildQrDataUrl(url: string): Promise<string | null> {
+  if (!url || url.length > QR_URL_MAX_LEN) return null;
+  try {
+    return await QRCode.toDataURL(url, { width: 240, margin: 1, errorCorrectionLevel: "M" });
+  } catch (err) {
+    console.error("[QR] toDataURL failed:", err);
+    return null;
+  }
+}
 import { AppToggle } from "@/components/app-toggle";
 import { Download, FileJson, Copy, Save, FileSpreadsheet, Settings, MapPin, ExternalLink, Search, Share2 } from "lucide-react";
 
@@ -72,6 +87,7 @@ export default function Home() {
   const [showConnections, setShowConnections] = useState(false);
   const [ponSearch, setPonSearch] = useState("");
   const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [shareQrDataUrl, setShareQrDataUrl] = useState<string | null>(null);
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
   const [sharing, setSharing] = useState(false);
   const mapCanvasRef = useRef<HTMLDivElement>(null);
@@ -243,6 +259,9 @@ export default function Home() {
     }
     if (!parsedExfo || !mapCanvasRef.current) return;
     if (!parsedExfo.terminals.length) return;
+    // The current share link points at a now-stale snapshot; force a rebuild on next export/share.
+    setShareUrl(null);
+    setShareQrDataUrl(null);
     try {
       // Try auto-resolve if user hasn't manually set city
       const hit = resolveCityFromCLLI(wireCenterClli);
@@ -268,6 +287,7 @@ export default function Home() {
           pfpName: parsedExfo.pfpName,
           terminals: parsedExfo.terminals,
           cache: geocodeCacheRef.current,
+          portByRow: portByExfoRow,
           onStatus: (m, k) => { setMapStatus(m); setMapStatusKind(k || ""); },
         }
       );
@@ -303,9 +323,11 @@ export default function Home() {
         parsedExfo.terminals,
         geocodeCacheRef.current,
         showConnections,
+        portByExfoRow,
       );
       const url = await buildMapViewerUrl(apiKey.trim(), data);
       setShareUrl(url);
+      setShareQrDataUrl(await tryBuildQrDataUrl(url));
       setShareDialogOpen(true);
       try { await navigator.clipboard.writeText(url); } catch (_) {}
       toast({
@@ -335,7 +357,8 @@ export default function Home() {
       parsedExfo.terminals,
       geocodeCacheRef.current,
       distances,
-      showConnections
+      showConnections,
+      portByExfoRow,
     );
     const w = window.open("", "_blank");
     if (!w) {
@@ -397,6 +420,41 @@ export default function Home() {
     return m;
   })();
 
+  // Test-port lookup keyed by ExfoTerminal.row (1-based) so map markers and
+  // share data can show the staggered Test Port number alongside the PON count.
+  const portByExfoRow = (() => {
+    const m = new Map<number, number>();
+    for (const t of staggeredTerminals) {
+      if (t.staggeredPort != null) m.set(t.rowIndex + 1, t.staggeredPort);
+    }
+    return m;
+  })();
+
+  const ensureShareUrl = async (): Promise<string | null> => {
+    if (shareUrl) return shareUrl;
+    if (!apiKey.trim() || !parsedExfo || !mapLoaded) return null;
+    try {
+      const data = buildShareData(
+        parsedExfo.project || cableId || "Terminal map",
+        parsedExfo.pfpName,
+        pfpLocation,
+        city.trim(),
+        parsedExfo.terminals,
+        geocodeCacheRef.current,
+        showConnections,
+        portByExfoRow,
+      );
+      const url = await buildMapViewerUrl(apiKey.trim(), data);
+      setShareUrl(url);
+      const qr = await tryBuildQrDataUrl(url);
+      if (qr) setShareQrDataUrl(qr);
+      return url;
+    } catch (err) {
+      console.error("ensureShareUrl failed:", err);
+      return null;
+    }
+  };
+
   const handleDownloadConverted = async () => {
     if (!parsedWorkbook || staggeredTerminals.length === 0) return;
     try {
@@ -408,6 +466,8 @@ export default function Home() {
       const metaTotalStrands =
         metaNum(parsedExfo?.meta?.totalStrands) ??
         staggeredTerminals.reduce((sum, t) => sum + (t.totalStrands || 0), 0);
+      const qrShareUrl = await ensureShareUrl();
+      const qrEligible = !!qrShareUrl && qrShareUrl.length <= QR_URL_MAX_LEN;
       const bytes = await generateConvertedXlsx(
         staggeredTerminals,
         {
@@ -418,6 +478,7 @@ export default function Home() {
           terminals: metaTerminals,
         },
         footageByRowIndex.size > 0 ? footageByRowIndex : undefined,
+        qrEligible ? qrShareUrl : null,
       );
       const blob = new Blob([bytes], {
         type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -433,14 +494,18 @@ export default function Home() {
       URL.revokeObjectURL(url);
       toast({
         title: "Spreadsheet Downloaded",
-        description: "Converted file with staggered columns saved.",
+        description: qrEligible
+          ? "Converted file saved — QR code links to the shared map."
+          : qrShareUrl
+            ? "Saved without QR — share URL too long to encode."
+            : "Converted file with staggered columns saved.",
       });
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
       toast({
         variant: "destructive",
         title: "Error Generating Spreadsheet",
-        description: "Could not build the converted file.",
+        description: e?.message ? String(e.message).slice(0, 220) : "Could not build the converted file.",
       });
     }
   };
@@ -875,6 +940,36 @@ export default function Home() {
                 <Copy className="w-3.5 h-3.5" />
               </Button>
             </div>
+            {shareQrDataUrl && (
+              <div className="flex flex-col items-center gap-2 pt-2">
+                <img
+                  src={shareQrDataUrl}
+                  alt="QR code linking to the shared map"
+                  className="w-44 h-44 rounded-md bg-white p-2"
+                />
+                <p className="text-xs text-muted-foreground text-center">
+                  Scan to open the map. The same QR is embedded in the exported XLSX.
+                </p>
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      if (!shareQrDataUrl) return;
+                      const a = document.createElement("a");
+                      a.href = shareQrDataUrl;
+                      const base = (parsedExfo?.project || cableId || "terminal-map").replace(/[^a-z0-9_-]+/gi, "_");
+                      a.download = `${base}_qr.png`;
+                      document.body.appendChild(a);
+                      a.click();
+                      document.body.removeChild(a);
+                    }}
+                  >
+                    <Download className="w-3.5 h-3.5 mr-1.5" /> Download QR
+                  </Button>
+                </div>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button onClick={() => setShareDialogOpen(false)}>Close</Button>

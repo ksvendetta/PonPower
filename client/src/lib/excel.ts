@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import ExcelJS from 'exceljs';
+import QRCode from 'qrcode';
 
 export interface Terminal {
   rowIndex: number; // 0-based
@@ -575,6 +576,7 @@ export async function generateConvertedXlsx(
   terminals: Terminal[],
   meta: CleanXlsxMeta = {},
   footageByRowIndex?: Map<number, number>,
+  shareUrl?: string | null,
 ): Promise<Uint8Array> {
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('PON TEST SHEET');
@@ -592,17 +594,30 @@ export async function generateConvertedXlsx(
       ? String(meta.totalStrands)
       : String(terminals.reduce((sum, t) => sum + (t.totalStrands || 0), 0));
 
-  // Row 1: five evenly-spaced metadata blocks across the 10 table columns.
-  const metaBlocks: Array<[number, number, string, string]> = [
-    [1, 2, 'PFP', meta.pfpName || ''],
-    [3, 4, 'PROJECT', meta.project || ''],
-    [5, 6, 'CABLE ID', cableId],
-    [7, 8, 'TOTAL STRANDS', totalStrandsCount],
-    [9, 10, 'TERMINALS', terminalCount],
-  ];
-  for (const [c0, c1, label, value] of metaBlocks) {
-    ws.mergeCells(1, c0, 1, c1);
-    const cell = ws.getCell(1, c0);
+  // 1,800 byte chars fits QR version 40 at error-correction level M with margin.
+  const hasQr = !!(shareUrl && shareUrl.trim() && shareUrl.length <= 1800);
+
+  // With a QR: row 1 is a small caption strip ("Scan QR for Map") sitting above the QR
+  // in cols 9-10; row 2 holds PFP / PROJECT / CABLE ID plus the QR itself; row 3 holds
+  // TOTAL STRANDS / TERMINALS. Without QR: original single-row 5-block layout.
+  const metaBlocks: Array<[number, number, number, string, string]> = hasQr
+    ? [
+        [2, 1, 2, 'PFP', meta.pfpName || ''],
+        [2, 3, 5, 'PROJECT', meta.project || ''],
+        [2, 6, 8, 'CABLE ID', cableId],
+        [3, 1, 5, 'TOTAL STRANDS', totalStrandsCount],
+        [3, 6, 10, 'TERMINALS', terminalCount],
+      ]
+    : [
+        [1, 1, 2, 'PFP', meta.pfpName || ''],
+        [1, 3, 4, 'PROJECT', meta.project || ''],
+        [1, 5, 6, 'CABLE ID', cableId],
+        [1, 7, 8, 'TOTAL STRANDS', totalStrandsCount],
+        [1, 9, 10, 'TERMINALS', terminalCount],
+      ];
+  for (const [row, c0, c1, label, value] of metaBlocks) {
+    ws.mergeCells(row, c0, row, c1);
+    const cell = ws.getCell(row, c0);
     cell.value = {
       richText: [
         { font: { bold: true }, text: `${label}:  ` },
@@ -612,8 +627,36 @@ export async function generateConvertedXlsx(
     cell.alignment = { horizontal: 'left', vertical: 'middle' };
   }
 
+  if (hasQr) {
+    // Row 1 holds the caption above the QR; row 2 carries the QR image itself.
+    try {
+      ws.mergeCells(1, 9, 1, 10);
+      const captionCell = ws.getCell(1, 9);
+      captionCell.value = 'Scan QR for Map';
+      captionCell.font = { bold: true, size: 10 };
+      captionCell.alignment = { horizontal: 'center', vertical: 'middle' };
+      ws.getRow(1).height = 18;
+      ws.getRow(2).height = 64;
+
+      const dataUrl = await QRCode.toDataURL(shareUrl!, {
+        width: 200,
+        margin: 1,
+        errorCorrectionLevel: 'M',
+      });
+      const imageId = wb.addImage({ base64: dataUrl, extension: 'png' });
+      // Center an 84px QR inside cols 9-10 (each width 10 ≈ 70px → ~140px combined).
+      // Offset ≈ (140-84)/2 / 70 = 0.4 into col 9 → tl.col = 8.4 (zero-indexed).
+      ws.addImage(imageId, {
+        tl: { col: 8.4, row: 1.05 } as any,
+        ext: { width: 84, height: 84 },
+      });
+    } catch (err) {
+      console.error('Failed to embed QR code in XLSX:', err);
+    }
+  }
+
   const headers = EXPORT_COLUMNS.map((c) => c.label);
-  const headerRowNum = 3;
+  const headerRowNum = hasQr ? 5 : 3;
   const gridLine = { style: 'thin' as const, color: { argb: 'FFBFBFBF' } };
   for (let i = 0; i < headers.length; i++) {
     const cell = ws.getCell(headerRowNum, i + 1);

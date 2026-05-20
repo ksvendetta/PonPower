@@ -152,11 +152,14 @@ export function buildPfpIconUrl(): string {
 }
 
 const TERMINAL_ICON_CACHE = new Map<string, string>();
-export function buildTerminalIconUrl(label: string): string {
-  if (TERMINAL_ICON_CACHE.has(label)) return TERMINAL_ICON_CACHE.get(label)!;
-  const w = Math.max(28, 10 + label.length * 7);
+export function buildTerminalIconUrl(label: string, port: number | null = null): string {
+  const cacheKey = `${label}|${port ?? ''}`;
+  if (TERMINAL_ICON_CACHE.has(cacheKey)) return TERMINAL_ICON_CACHE.get(cacheKey)!;
+  const display = port != null ? `P${port}·${label}` : label;
+  const w = Math.max(28, 10 + display.length * 7);
   const h = 22;
   const innerX = 0.75, innerY = 0.75, innerW = w - 1.5, innerH = h - 1.5, rx = 6;
+  // Color buckets are driven by PON numbers only; the port prefix is text-only.
   const weights = ponBucketWeights(label);
   const total = weights.reduce((s, n) => s + n, 0);
   let body: string;
@@ -181,10 +184,10 @@ export function buildTerminalIconUrl(label: string): string {
   const svg =
     `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">` +
     body +
-    `<text x="${w / 2}" y="${h - 6}" text-anchor="middle" font-family="Arial,sans-serif" font-size="12" font-weight="bold" fill="${textFill}">${label}</text>` +
+    `<text x="${w / 2}" y="${h - 6}" text-anchor="middle" font-family="Arial,sans-serif" font-size="12" font-weight="bold" fill="${textFill}">${display}</text>` +
     `</svg>`;
   const url = 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg);
-  TERMINAL_ICON_CACHE.set(label, url);
+  TERMINAL_ICON_CACHE.set(cacheKey, url);
   return url;
 }
 
@@ -194,6 +197,7 @@ export interface RenderMapOptions {
   pfpName: string | null;
   terminals: ExfoTerminal[];
   cache: Map<string, GeocodeHit>;
+  portByRow?: Map<number, number>;
   onStatus?: (msg: string, kind?: 'err' | 'ok' | '') => void;
 }
 
@@ -210,7 +214,7 @@ export async function renderEmbeddedMap(
   state: { gmap: any | null; gmarkers: any[]; connections: any[]; showConnections: boolean },
   opts: RenderMapOptions
 ): Promise<RenderMapResult> {
-  const { apiKey, city, pfpName, terminals, cache, onStatus } = opts;
+  const { apiKey, city, pfpName, terminals, cache, portByRow, onStatus } = opts;
   const buildQuery = (addr: string) => city ? `${addr}, ${city}` : addr;
 
   onStatus?.('Loading Google Maps…');
@@ -297,11 +301,13 @@ export async function renderEmbeddedMap(
         segs.push(lo === hi ? `${lo}` : `${lo}-${hi}`);
         return segs.join(',');
       })();
-      const w = Math.max(28, 10 + label.length * 7);
+      const port = portByRow?.get(tgt.t.row) ?? null;
+      const display = port != null ? `P${port}·${label}` : label;
+      const w = Math.max(28, 10 + display.length * 7);
       const marker = new window.google.maps.Marker({
         map: state.gmap, position: pos, title: tgt.t.terminal,
         icon: {
-          url: buildTerminalIconUrl(label),
+          url: buildTerminalIconUrl(label, port),
           anchor: new window.google.maps.Point(w / 2, 11),
           scaledSize: new window.google.maps.Size(w, 22),
         },
@@ -631,7 +637,8 @@ export function buildOpenInNewTabHtml(
   terminals: ExfoTerminal[],
   cache: Map<string, GeocodeHit>,
   distances: Map<number, number>,
-  showConnections: boolean
+  showConnections: boolean,
+  portByRow?: Map<number, number>,
 ): string {
   const buildQuery = (addr: string) => city ? `${addr}, ${city}` : addr;
   const escHtml = (s: any) => String(s ?? '').replace(/[&<>"']/g, (c: string) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] || c));
@@ -643,6 +650,7 @@ export function buildOpenInNewTabHtml(
     const nums = terminalStrandNumbers(t);
     return {
       name: t.terminal, addr, waldo: t.waldo || '',
+      port: portByRow?.get(t.row) ?? null,
       lat: loc.lat, lng: loc.lng,
       strands: terminalStrandRange(t),
       strandNums: nums,
@@ -706,10 +714,10 @@ export function buildOpenInNewTabHtml(
   var PON_BUCKET_COLORS=['#2962ff','#ff6f00','#2e7d32','#6d4c41','#607d8b','#ffffff','#d32f2f','#212121','#fbc02d','#8e24aa'];
   var PON_LIGHT_BUCKETS={5:1,8:1};
   function ponBucketWeights(label){var w=[0,0,0,0,0,0,0,0,0,0];if(!label)return w;var s=String(label).split(',');for(var si=0;si<s.length;si++){var m=s[si].trim().match(/^(\\d+)(?:-(\\d+))?$/);if(!m)continue;var a=parseInt(m[1],10),b=m[2]!=null?parseInt(m[2],10):a;if(isNaN(a)||isNaN(b))continue;var lo=Math.min(a,b),hi=Math.max(a,b);for(var n=lo;n<=hi;n++){var idx=Math.floor(n/100);if(idx<0)idx=0;else if(idx>=w.length)idx=w.length-1;w[idx]+=1;}}return w;}
-  function terminalIcon(label){if(TERM_ICONS[label])return TERM_ICONS[label];var w=Math.max(28,10+String(label).length*7),h=22,iX=0.75,iY=0.75,iW=w-1.5,iH=h-1.5,rx=6;var weights=ponBucketWeights(label),total=0;for(var i=0;i<weights.length;i++)total+=weights[i];var body;if(total===0){body='<rect x="'+iX+'" y="'+iY+'" width="'+iW+'" height="'+iH+'" rx="'+rx+'" fill="'+PON_BUCKET_COLORS[0]+'"/>';}else{var parts='',x=iX;for(var j=0;j<weights.length;j++){if(!weights[j])continue;var sw=(weights[j]/total)*iW;parts+='<rect x="'+x+'" y="'+iY+'" width="'+sw+'" height="'+iH+'" fill="'+PON_BUCKET_COLORS[j]+'"/>';x+=sw;}body='<defs><clipPath id="ponClip"><rect x="'+iX+'" y="'+iY+'" width="'+iW+'" height="'+iH+'" rx="'+rx+'"/></clipPath></defs><g clip-path="url(#ponClip)">'+parts+'</g>';}body+='<rect x="'+iX+'" y="'+iY+'" width="'+iW+'" height="'+iH+'" rx="'+rx+'" fill="none" stroke="white" stroke-width="1.5"/>';var dI=0,dV=-1;for(var k=0;k<weights.length;k++)if(weights[k]>dV){dV=weights[k];dI=k;}var tF=PON_LIGHT_BUCKETS[dI]?'#000':'#fff';var svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+w+'" height="'+h+'" viewBox="0 0 '+w+' '+h+'">'+body+'<text x="'+(w/2)+'" y="'+(h-6)+'" text-anchor="middle" font-family="Arial,sans-serif" font-size="12" font-weight="bold" fill="'+tF+'">'+label+'</text></svg>';TERM_ICONS[label]={url:'data:image/svg+xml;charset=UTF-8,'+encodeURIComponent(svg),anchor:new google.maps.Point(w/2,h/2),scaledSize:new google.maps.Size(w,h)};return TERM_ICONS[label];}
+  function terminalIcon(label,port){var key=label+'|'+(port==null?'':port);if(TERM_ICONS[key])return TERM_ICONS[key];var display=(port!=null)?('P'+port+'·'+label):label;var w=Math.max(28,10+String(display).length*7),h=22,iX=0.75,iY=0.75,iW=w-1.5,iH=h-1.5,rx=6;var weights=ponBucketWeights(label),total=0;for(var i=0;i<weights.length;i++)total+=weights[i];var body;if(total===0){body='<rect x="'+iX+'" y="'+iY+'" width="'+iW+'" height="'+iH+'" rx="'+rx+'" fill="'+PON_BUCKET_COLORS[0]+'"/>';}else{var parts='',x=iX;for(var j=0;j<weights.length;j++){if(!weights[j])continue;var sw=(weights[j]/total)*iW;parts+='<rect x="'+x+'" y="'+iY+'" width="'+sw+'" height="'+iH+'" fill="'+PON_BUCKET_COLORS[j]+'"/>';x+=sw;}body='<defs><clipPath id="ponClip"><rect x="'+iX+'" y="'+iY+'" width="'+iW+'" height="'+iH+'" rx="'+rx+'"/></clipPath></defs><g clip-path="url(#ponClip)">'+parts+'</g>';}body+='<rect x="'+iX+'" y="'+iY+'" width="'+iW+'" height="'+iH+'" rx="'+rx+'" fill="none" stroke="white" stroke-width="1.5"/>';var dI=0,dV=-1;for(var k=0;k<weights.length;k++)if(weights[k]>dV){dV=weights[k];dI=k;}var tF=PON_LIGHT_BUCKETS[dI]?'#000':'#fff';var svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+w+'" height="'+h+'" viewBox="0 0 '+w+' '+h+'">'+body+'<text x="'+(w/2)+'" y="'+(h-6)+'" text-anchor="middle" font-family="Arial,sans-serif" font-size="12" font-weight="bold" fill="'+tF+'">'+display+'</text></svg>';TERM_ICONS[key]={url:'data:image/svg+xml;charset=UTF-8,'+encodeURIComponent(svg),anchor:new google.maps.Point(w/2,h/2),scaledSize:new google.maps.Size(w,h)};return TERM_ICONS[key];}
   let MAP=null;const LINES=[];function clearLines(){for(const l of LINES)l.setMap(null);LINES.length=0;}
   function drawLines(){clearLines();if(!MAP)return;const ord=TERMS.slice().sort((a,b)=>a.minStrand-b.minStrand);let prev=null;for(const t of ord){const pos=new google.maps.LatLng(t.lat,t.lng);if(prev){LINES.push(new google.maps.Polyline({path:[prev,pos],geodesic:true,strokeColor:'#ff6f00',strokeOpacity:0.9,strokeWeight:3,icons:[{icon:{path:google.maps.SymbolPath.FORWARD_CLOSED_ARROW,scale:4,strokeColor:'#ff6f00',fillColor:'#ff6f00',fillOpacity:1},offset:'92%'}],map:MAP}));}prev=pos;}}
-  function initMap(){const center=PFP?{lat:PFP.lat,lng:PFP.lng}:{lat:TERMS[0].lat,lng:TERMS[0].lng};MAP=new google.maps.Map(document.getElementById('map'),{zoom:12,center});const bounds=new google.maps.LatLngBounds();if(PFP){const m=new google.maps.Marker({map:MAP,position:{lat:PFP.lat,lng:PFP.lng},icon:pfpIcon(),title:PFP.name+'\\n'+PFP.addr,zIndex:999999});bounds.extend(m.getPosition());const info=new google.maps.InfoWindow({content:'<b>PFP (starting point)</b><br>'+PFP.name+'<br>'+PFP.addr});m.addListener('click',()=>info.open({anchor:m,map:MAP}));}var TERM_MARKERS=[];for(const t of TERMS){const m=new google.maps.Marker({map:MAP,position:{lat:t.lat,lng:t.lng},icon:terminalIcon(t.strands),title:t.name});m._strandNums=Array.isArray(t.strandNums)?t.strandNums:[];TERM_MARKERS.push(m);bounds.extend(m.getPosition());const info=new google.maps.InfoWindow({content:'<b>'+t.name+'</b><br>'+t.addr+'<br>Strands: '+t.strands+(t.waldo?'<br>Waldo: '+t.waldo:'')+(t.dist?'<br>Distance from PFP: '+t.dist:'')});m.addListener('click',()=>info.open({anchor:m,map:MAP}));}MAP.fitBounds(bounds,40);const tg=document.getElementById('connToggle');tg.addEventListener('change',()=>{if(tg.checked)drawLines();else clearLines();});if(tg.checked)drawLines();var sI=document.getElementById('ponSearch'),sB=document.getElementById('ponSearchBtn'),sS=document.getElementById('ponSearchStatus');function flashPon(){var raw=(sI.value||'').trim();if(!raw)return;var n=parseInt(raw,10);if(isNaN(n)){sS.textContent='Enter a numeric Pon count.';sS.style.color='#b71c1c';return;}var matches=TERM_MARKERS.filter(function(mk){return mk._strandNums&&mk._strandNums.indexOf(n)!==-1;});if(!matches.length){sS.textContent='No terminal contains Pon count '+n+'.';sS.style.color='#b71c1c';return;}MAP.panTo(matches[0].getPosition());matches.forEach(function(mk){mk.setAnimation(google.maps.Animation.BOUNCE);});setTimeout(function(){matches.forEach(function(mk){mk.setAnimation(null);});},3000);sS.textContent='Flashing '+matches.length+' terminal'+(matches.length>1?'s':'')+' with Pon count '+n+'.';sS.style.color='#1b5e20';}sB.addEventListener('click',flashPon);sI.addEventListener('keydown',function(e){if(e.key==='Enter')flashPon();});}
+  function initMap(){const center=PFP?{lat:PFP.lat,lng:PFP.lng}:{lat:TERMS[0].lat,lng:TERMS[0].lng};MAP=new google.maps.Map(document.getElementById('map'),{zoom:12,center});const bounds=new google.maps.LatLngBounds();if(PFP){const m=new google.maps.Marker({map:MAP,position:{lat:PFP.lat,lng:PFP.lng},icon:pfpIcon(),title:PFP.name+'\\n'+PFP.addr,zIndex:999999});bounds.extend(m.getPosition());const info=new google.maps.InfoWindow({content:'<b>PFP (starting point)</b><br>'+PFP.name+'<br>'+PFP.addr});m.addListener('click',()=>info.open({anchor:m,map:MAP}));}var TERM_MARKERS=[];for(const t of TERMS){const m=new google.maps.Marker({map:MAP,position:{lat:t.lat,lng:t.lng},icon:terminalIcon(t.strands,t.port),title:t.name});m._strandNums=Array.isArray(t.strandNums)?t.strandNums:[];TERM_MARKERS.push(m);bounds.extend(m.getPosition());const info=new google.maps.InfoWindow({content:'<b>'+t.name+'</b><br>'+t.addr+'<br>Strands: '+t.strands+(t.port!=null?'<br>Test Port: '+t.port:'')+(t.waldo?'<br>Waldo: '+t.waldo:'')+(t.dist?'<br>Distance from PFP: '+t.dist:'')});m.addListener('click',()=>info.open({anchor:m,map:MAP}));}MAP.fitBounds(bounds,40);const tg=document.getElementById('connToggle');tg.addEventListener('change',()=>{if(tg.checked)drawLines();else clearLines();});if(tg.checked)drawLines();var sI=document.getElementById('ponSearch'),sB=document.getElementById('ponSearchBtn'),sS=document.getElementById('ponSearchStatus');function flashPon(){var raw=(sI.value||'').trim();if(!raw)return;var n=parseInt(raw,10);if(isNaN(n)){sS.textContent='Enter a numeric Pon count.';sS.style.color='#b71c1c';return;}var matches=TERM_MARKERS.filter(function(mk){return mk._strandNums&&mk._strandNums.indexOf(n)!==-1;});if(!matches.length){sS.textContent='No terminal contains Pon count '+n+'.';sS.style.color='#b71c1c';return;}MAP.panTo(matches[0].getPosition());matches.forEach(function(mk){mk.setAnimation(google.maps.Animation.BOUNCE);});setTimeout(function(){matches.forEach(function(mk){mk.setAnimation(null);});},3000);sS.textContent='Flashing '+matches.length+' terminal'+(matches.length>1?'s':'')+' with Pon count '+n+'.';sS.style.color='#1b5e20';}sB.addEventListener('click',flashPon);sI.addEventListener('keydown',function(e){if(e.key==='Enter')flashPon();});}
   window.gm_authFailure=function(){document.body.insertAdjacentHTML('afterbegin','<div style="padding:12px;background:#ffebee;color:#b71c1c;font:13px sans-serif;">Google Maps rejected the API key.</div>');};
 <\/script>
 <script src="https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&callback=initMap" async defer><\/script>
@@ -718,6 +726,7 @@ export function buildOpenInNewTabHtml(
 
 interface ShareTerm {
   name: string; addr: string; waldo: string;
+  port: number | null;
   lat: number; lng: number;
   strands: string; strandNums: number[]; minStrand: number;
   dist: string | null;
@@ -731,6 +740,7 @@ export function buildShareData(
   terminals: ExfoTerminal[],
   cache: Map<string, GeocodeHit>,
   showConnections: boolean,
+  portByRow?: Map<number, number>,
 ): { title: string; pfp: any; terms: ShareTerm[]; connect: boolean } {
   const buildQuery = (addr: string) => city ? `${addr}, ${city}` : addr;
   const terms = terminals.map(t => {
@@ -741,6 +751,7 @@ export function buildShareData(
     const nums = terminalStrandNumbers(t);
     return {
       name: t.terminal, addr, waldo: t.waldo || '',
+      port: portByRow?.get(t.row) ?? null,
       lat: loc.lat, lng: loc.lng,
       strands: terminalStrandRange(t),
       strandNums: nums,
