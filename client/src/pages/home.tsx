@@ -24,6 +24,8 @@ import {
   parseTerminals,
   computeStaggeredColumns,
   generateConvertedXlsx,
+  ponCountForTerminal,
+  EXPORT_COLUMNS,
   Terminal,
   ParsedWorkbook,
 } from "@/lib/excel";
@@ -387,10 +389,36 @@ export default function Home() {
     return m;
   })();
 
+  // Map distance lookup from ExfoTerminal.row (1-based) to Terminal.rowIndex (0-based).
+  // Both parsers point at the same physical xlsx rows: ExfoTerminal.row === Terminal.rowIndex + 1.
+  const footageByRowIndex = (() => {
+    const m = new Map<number, number>();
+    distances.forEach((v, exfoRow) => { m.set(exfoRow - 1, v); });
+    return m;
+  })();
+
   const handleDownloadConverted = async () => {
     if (!parsedWorkbook || staggeredTerminals.length === 0) return;
     try {
-      const bytes = await generateConvertedXlsx(parsedWorkbook, staggeredTerminals);
+      const metaNum = (raw: unknown): number | null => {
+        const n = typeof raw === 'number' ? raw : parseInt(String(raw ?? ''), 10);
+        return Number.isFinite(n) ? n : null;
+      };
+      const metaTerminals = metaNum(parsedExfo?.meta?.terminals) ?? staggeredTerminals.length;
+      const metaTotalStrands =
+        metaNum(parsedExfo?.meta?.totalStrands) ??
+        staggeredTerminals.reduce((sum, t) => sum + (t.totalStrands || 0), 0);
+      const bytes = await generateConvertedXlsx(
+        staggeredTerminals,
+        {
+          pfpName: parsedExfo?.pfpName ?? null,
+          project: parsedExfo?.project ?? cfas ?? null,
+          cableId: cableId || null,
+          totalStrands: metaTotalStrands,
+          terminals: metaTerminals,
+        },
+        footageByRowIndex.size > 0 ? footageByRowIndex : undefined,
+      );
       const blob = new Blob([bytes], {
         type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       });
@@ -606,7 +634,7 @@ export default function Home() {
                   Spreadsheet Preview
                 </CardTitle>
                 <CardDescription className="mt-1">
-                  Original terminals with generated Staggered Port and Staggered Strand columns.
+                  Matches the exported XLSX exactly. Estm FT fills in once Step 5's map is loaded.
                 </CardDescription>
               </div>
               <Button
@@ -621,36 +649,66 @@ export default function Home() {
           </CardHeader>
           <CardContent className="p-0">
             {staggeredTerminals.length > 0 ? (
-              <div className="max-h-[500px] overflow-auto">
-                <Table className="font-mono text-xs">
-                  <TableHeader className="sticky top-0 bg-secondary/40 backdrop-blur-sm z-10">
-                    <TableRow>
-                      <TableHead>Waldo ID</TableHead>
-                      <TableHead>Terminal</TableHead>
-                      <TableHead>Cable ID</TableHead>
-                      <TableHead className="text-right">Power Test</TableHead>
-                      <TableHead>OTDR Test</TableHead>
-                      <TableHead className="text-right">Total Strands</TableHead>
-                      <TableHead className="text-right text-primary">Staggered Port</TableHead>
-                      <TableHead className="text-right text-primary">Staggered Strand</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {staggeredTerminals.map((t) => (
-                      <TableRow key={t.rowIndex}>
-                        <TableCell>{t.waldoId}</TableCell>
-                        <TableCell className="whitespace-nowrap">{t.terminalName}</TableCell>
-                        <TableCell>{t.cableId}</TableCell>
-                        <TableCell className="text-right">{t.powerTestStrand}</TableCell>
-                        <TableCell>{t.otdrTestStrand}</TableCell>
-                        <TableCell className="text-right">{t.totalStrands}</TableCell>
-                        <TableCell className="text-right text-primary font-bold">{t.staggeredPort}</TableCell>
-                        <TableCell className="text-right text-primary font-bold">{t.staggeredStrand}</TableCell>
+              <>
+                <div className="px-4 py-3 border-b border-border/40 bg-secondary/10 grid grid-cols-2 sm:grid-cols-5 gap-x-6 gap-y-1 text-xs font-mono">
+                  {(() => {
+                    const num = (raw: unknown): number | null => {
+                      const n = typeof raw === 'number' ? raw : parseInt(String(raw ?? ''), 10);
+                      return Number.isFinite(n) ? n : null;
+                    };
+                    const terminalsN = num(parsedExfo?.meta?.terminals) ?? staggeredTerminals.length;
+                    const totalStrandsN =
+                      num(parsedExfo?.meta?.totalStrands) ??
+                      staggeredTerminals.reduce((sum, t) => sum + (t.totalStrands || 0), 0);
+                    return (
+                      <>
+                        <div><span className="text-muted-foreground">PFP:</span> {parsedExfo?.pfpName || <span className="text-muted-foreground">—</span>}</div>
+                        <div><span className="text-muted-foreground">PROJECT:</span> {parsedExfo?.project || cfas || <span className="text-muted-foreground">—</span>}</div>
+                        <div><span className="text-muted-foreground">CABLE ID:</span> {cableId || staggeredTerminals.find(t => t.cableId)?.cableId || <span className="text-muted-foreground">—</span>}</div>
+                        <div><span className="text-muted-foreground">TOTAL STRANDS:</span> {totalStrandsN}</div>
+                        <div><span className="text-muted-foreground">TERMINALS:</span> {terminalsN}</div>
+                      </>
+                    );
+                  })()}
+                </div>
+                <div className="max-h-[500px] overflow-auto">
+                  <Table className="font-mono text-xs">
+                    <TableHeader className="sticky top-0 bg-secondary/40 backdrop-blur-sm z-10">
+                      <TableRow>
+                        {EXPORT_COLUMNS.map((c, i) => (
+                          <TableHead
+                            key={c.label}
+                            className={i === 0 ? '' : 'text-center'}
+                          >
+                            {c.label}
+                          </TableHead>
+                        ))}
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
+                    </TableHeader>
+                    <TableBody>
+                      {staggeredTerminals.map((t) => {
+                        const ft = footageByRowIndex.get(t.rowIndex);
+                        return (
+                          <TableRow key={t.rowIndex}>
+                            <TableCell className="whitespace-nowrap">{t.terminalName}</TableCell>
+                            <TableCell className="text-center">{ponCountForTerminal(t)}</TableCell>
+                            <TableCell className="text-center">{t.totalStrands}</TableCell>
+                            <TableCell className="text-center text-primary font-bold">{t.staggeredPort}</TableCell>
+                            <TableCell className="text-center text-primary font-bold">{t.staggeredStrand}</TableCell>
+                            <TableCell className="text-center text-primary font-bold">
+                              {ft != null ? Math.round(ft).toLocaleString() : <span className="text-muted-foreground font-normal">—</span>}
+                            </TableCell>
+                            <TableCell className="text-center text-muted-foreground">—</TableCell>
+                            <TableCell className="text-center text-muted-foreground">—</TableCell>
+                            <TableCell className="text-center text-muted-foreground">—</TableCell>
+                            <TableCell className="text-center text-muted-foreground">—</TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              </>
             ) : (
               <div className="flex flex-col items-center justify-center text-muted-foreground py-16 opacity-50">
                 <FileSpreadsheet className="w-12 h-12 mb-2" />

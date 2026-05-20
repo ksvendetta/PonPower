@@ -1,25 +1,5 @@
 import * as XLSX from 'xlsx';
 import ExcelJS from 'exceljs';
-import { unzipSync, zipSync, strFromU8, strToU8 } from 'fflate';
-
-function colNumberToLetters(n: number): string {
-  let s = '';
-  while (n > 0) {
-    const m = (n - 1) % 26;
-    s = String.fromCharCode(65 + m) + s;
-    n = Math.floor((n - 1) / 26);
-  }
-  return s;
-}
-
-function escapeXml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
-}
 
 export interface Terminal {
   rowIndex: number; // 0-based
@@ -541,80 +521,172 @@ export function computeStaggeredColumns(terminals: Terminal[]): Terminal[] {
   });
 }
 
+function parseLastStrand(otdr: string | null | undefined): number | null {
+  if (!otdr) return null;
+  const nums: number[] = [];
+  for (const part of String(otdr).split(/[,/]/)) {
+    const p = part.trim();
+    if (!p) continue;
+    if (p.includes('-')) {
+      const [a, b] = p.split('-').map((s) => parseInt(s.trim(), 10));
+      if (!isNaN(a)) nums.push(a);
+      if (!isNaN(b)) nums.push(b);
+    } else {
+      const n = parseInt(p, 10);
+      if (!isNaN(n)) nums.push(n);
+    }
+  }
+  return nums.length ? Math.max(...nums) : null;
+}
+
+export function ponCountForTerminal(t: Terminal): string {
+  const last = parseLastStrand(t.otdrTestStrand);
+  const end = last ?? (t.powerTestStrand + t.totalStrands - 1);
+  return `${t.powerTestStrand}-${end}`;
+}
+
+export interface CleanXlsxMeta {
+  pfpName?: string | null;
+  project?: string | null;
+  cableId?: string | null;
+  totalStrands?: number | null;
+  terminals?: number | null;
+}
+
+export interface ExportColumn {
+  label: string;
+  width: number; // Excel column width units
+}
+
+export const EXPORT_COLUMNS: ExportColumn[] = [
+  { label: 'Terminal', width: 24 },
+  { label: 'PON Count', width: 11 },
+  { label: 'Total Strands', width: 14 },
+  { label: 'Test Port', width: 11 },
+  { label: 'Test Strand', width: 12 },
+  { label: 'Estm FT', width: 10 },
+  { label: 'Real FT', width: 10 },
+  { label: 'Fail', width: 10 },
+  { label: 'Lost', width: 10 },
+  { label: '@FT', width: 10 },
+];
+
 export async function generateConvertedXlsx(
-  parsed: ParsedWorkbook,
   terminals: Terminal[],
-  portColIndex = 38,
-  strandColIndex = 39
+  meta: CleanXlsxMeta = {},
+  footageByRowIndex?: Map<number, number>,
 ): Promise<Uint8Array> {
-  const portColNum = portColIndex + 1;
-  const strandColNum = strandColIndex + 1;
-  const portColLetter = colNumberToLetters(portColNum);
-  const strandColLetter = colNumberToLetters(strandColNum);
-  const headerRowNum = parsed.headerRowIndex + 1;
-  const powerColLetter = colNumberToLetters(parsed.powerStrandColIndex + 1);
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('PON TEST SHEET');
 
-  const zip = unzipSync(new Uint8Array(parsed.fileBuffer));
-  const sheetPath = Object.keys(zip).find((p) => /^xl\/worksheets\/sheet1\.xml$/i.test(p));
-  if (!sheetPath) throw new Error('Could not find sheet1.xml in workbook.');
-  let xml = strFromU8(zip[sheetPath]);
+  const cableId =
+    (meta.cableId && meta.cableId.trim()) ||
+    (terminals.find((t) => t.cableId)?.cableId ?? '');
 
-  const findCellStyle = (cellRef: string): string => {
-    const m = xml.match(new RegExp(`<c[^>]*\\sr="${cellRef}"[^>]*>`));
-    if (!m) return '';
-    const s = m[0].match(/\ss="(\d+)"/);
-    return s ? ` s="${s[1]}"` : '';
-  };
+  const terminalCount =
+    meta.terminals != null && !Number.isNaN(meta.terminals)
+      ? String(meta.terminals)
+      : String(terminals.length);
+  const totalStrandsCount =
+    meta.totalStrands != null && !Number.isNaN(meta.totalStrands)
+      ? String(meta.totalStrands)
+      : String(terminals.reduce((sum, t) => sum + (t.totalStrands || 0), 0));
 
-  const headerStyleAttr = findCellStyle(`${powerColLetter}${headerRowNum}`);
-  const firstTerminal = terminals.find((t) => t.staggeredPort !== undefined);
-  const dataStyleAttr = firstTerminal
-    ? findCellStyle(`${powerColLetter}${firstTerminal.rowIndex + 1}`)
-    : '';
-
-  const replaceColDef = (colNum: number, width: number) => {
-    const colLetter = colNumberToLetters(colNum);
-    const newDef = `<col min="${colNum}" max="${colNum}" customWidth="1" width="${width}"></col>`;
-    const re = new RegExp(`<col\\s[^>]*\\bmin="${colNum}"[^>]*\\bmax="${colNum}"[^>]*(?:\\/>|>\\s*<\\/col>)`);
-    if (re.test(xml)) {
-      xml = xml.replace(re, newDef);
-    } else {
-      xml = xml.replace(/<\/cols>/, `${newDef}</cols>`);
-      if (!/<\/cols>/.test(xml)) {
-        xml = xml.replace(/<sheetData>/, `<cols>${newDef}</cols><sheetData>`);
-      }
-    }
-    void colLetter;
-  };
-  replaceColDef(portColNum, 14);
-  replaceColDef(strandColNum, 16);
-
-  const insertCellsIntoRow = (rowNum: number, cellsXml: string) => {
-    const re = new RegExp(`(<row\\s[^>]*\\br="${rowNum}"[^>]*>)([\\s\\S]*?)(</row>)`);
-    if (re.test(xml)) {
-      xml = xml.replace(re, `$1$2${cellsXml}$3`);
-    } else {
-      const sheetDataClose = '</sheetData>';
-      const newRow = `<row r="${rowNum}">${cellsXml}</row>`;
-      xml = xml.replace(sheetDataClose, `${newRow}${sheetDataClose}`);
-    }
-  };
-
-  const headerCells =
-    `<c${headerStyleAttr} t="inlineStr" r="${portColLetter}${headerRowNum}"><is><t xml:space="preserve">${escapeXml('Staggered Port')}</t></is></c>` +
-    `<c${headerStyleAttr} t="inlineStr" r="${strandColLetter}${headerRowNum}"><is><t xml:space="preserve">${escapeXml('Staggered Strand')}</t></is></c>`;
-  insertCellsIntoRow(headerRowNum, headerCells);
-
-  for (const t of terminals) {
-    if (t.staggeredPort === undefined || t.staggeredStrand === undefined) continue;
-    const rowNum = t.rowIndex + 1;
-    const cells =
-      `<c${dataStyleAttr} r="${portColLetter}${rowNum}"><v>${t.staggeredPort}</v></c>` +
-      `<c${dataStyleAttr} r="${strandColLetter}${rowNum}"><v>${t.staggeredStrand}</v></c>`;
-    insertCellsIntoRow(rowNum, cells);
+  // Row 1: five evenly-spaced metadata blocks across the 10 table columns.
+  const metaBlocks: Array<[number, number, string, string]> = [
+    [1, 2, 'PFP', meta.pfpName || ''],
+    [3, 4, 'PROJECT', meta.project || ''],
+    [5, 6, 'CABLE ID', cableId],
+    [7, 8, 'TOTAL STRANDS', totalStrandsCount],
+    [9, 10, 'TERMINALS', terminalCount],
+  ];
+  for (const [c0, c1, label, value] of metaBlocks) {
+    ws.mergeCells(1, c0, 1, c1);
+    const cell = ws.getCell(1, c0);
+    cell.value = {
+      richText: [
+        { font: { bold: true }, text: `${label}:  ` },
+        { text: value },
+      ],
+    };
+    cell.alignment = { horizontal: 'left', vertical: 'middle' };
   }
 
-  zip[sheetPath] = strToU8(xml);
-  const out = zipSync(zip, { level: 6 });
-  return out;
+  const headers = EXPORT_COLUMNS.map((c) => c.label);
+  const headerRowNum = 3;
+  const gridLine = { style: 'thin' as const, color: { argb: 'FFBFBFBF' } };
+  for (let i = 0; i < headers.length; i++) {
+    const cell = ws.getCell(headerRowNum, i + 1);
+    cell.value = headers[i];
+    cell.font = { bold: true };
+    cell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFD9E1F2' },
+    };
+    cell.alignment = {
+      horizontal: i === 0 ? 'left' : 'center',
+      vertical: 'middle',
+      wrapText: true,
+    };
+    cell.border = {
+      top: gridLine,
+      left: gridLine,
+      right: gridLine,
+      bottom: { style: 'medium', color: { argb: 'FF305496' } },
+    };
+  }
+
+  EXPORT_COLUMNS.forEach((c, i) => { ws.getColumn(i + 1).width = c.width; });
+  const lastCol = EXPORT_COLUMNS.length;
+
+  let r = headerRowNum + 1;
+  let zebraIndex = 0;
+  const zebraFill = {
+    type: 'pattern' as const,
+    pattern: 'solid' as const,
+    fgColor: { argb: 'FFF2F2F2' },
+  };
+  for (const t of terminals) {
+    if (t.staggeredPort === undefined || t.staggeredStrand === undefined) continue;
+    ws.getCell(r, 1).value = t.terminalName;
+    ws.getCell(r, 2).value = ponCountForTerminal(t);
+    ws.getCell(r, 3).value = t.totalStrands;
+    ws.getCell(r, 4).value = t.staggeredPort;
+    ws.getCell(r, 5).value = t.staggeredStrand;
+    const ft = footageByRowIndex?.get(t.rowIndex);
+    if (ft != null && !Number.isNaN(ft)) {
+      const cell = ws.getCell(r, 6);
+      cell.value = Math.round(ft);
+      cell.numFmt = '#,##0';
+    }
+    // Column 7 (Real FT / Fail / Lost / @FT) is left blank for manual entry.
+    for (let c = 2; c <= lastCol; c++) {
+      ws.getCell(r, c).alignment = { horizontal: 'center' };
+    }
+    for (let c = 1; c <= lastCol; c++) {
+      ws.getCell(r, c).border = {
+        top: gridLine,
+        left: gridLine,
+        right: gridLine,
+        bottom: gridLine,
+      };
+    }
+    if (zebraIndex % 2 === 1) {
+      for (let c = 1; c <= lastCol; c++) {
+        ws.getCell(r, c).fill = zebraFill;
+      }
+    }
+    zebraIndex++;
+    r++;
+  }
+
+  // Repeat the column-header row (row 3) at the top of every printed page.
+  ws.pageSetup = {
+    ...(ws.pageSetup || {}),
+    printTitlesRow: `${headerRowNum}:${headerRowNum}`,
+  };
+
+  const buf = await wb.xlsx.writeBuffer();
+  return new Uint8Array(buf);
 }
