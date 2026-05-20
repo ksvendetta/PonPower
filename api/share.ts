@@ -60,6 +60,8 @@ export default async function handler(req: Req, res: Res) {
         const id = genId();
         try {
           await sql`INSERT INTO ponshares (id, api_key, data) VALUES (${id}, ${k}, ${d})`;
+          // Keep only the 10 most recent shares; evict the rest.
+          await sql`DELETE FROM ponshares WHERE id NOT IN (SELECT id FROM ponshares ORDER BY created_at DESC LIMIT 10)`;
           res.status(200).json({ id });
           return;
         } catch (e: any) {
