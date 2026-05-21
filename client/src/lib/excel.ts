@@ -503,21 +503,18 @@ export async function parseTerminals(file: File): Promise<ParsedWorkbook> {
 }
 
 export function computeStaggeredColumns(terminals: Terminal[]): Terminal[] {
-  let port = 1;
-  return terminals.map((t, idx) => {
-    const startPort = t.totalStrands === 2 ? 2 : 1;
-    const offset = Math.max(0, port - startPort);
-    const staggeredStrand = t.powerTestStrand + offset;
-    const result = { ...t, staggeredPort: port, staggeredStrand };
+  let nextPort = 1;
 
-    const next = terminals[idx + 1];
-    const currentIsTwo = t.totalStrands === 2;
-    const nextIsTwo = next && next.totalStrands === 2;
-    if (currentIsTwo && nextIsTwo && port === 2) {
-      port = 1;
-    } else {
-      port = (port % 4) + 1;
-    }
+  return terminals.map((t) => {
+    const availablePorts = t.totalStrands === 2 ? [2, 3] : [1, 2, 3, 4];
+    const portIndex = availablePorts.includes(nextPort)
+      ? availablePorts.indexOf(nextPort)
+      : 0;
+    const staggeredPort = availablePorts[portIndex];
+    const staggeredStrand = t.powerTestStrand + portIndex;
+    const result = { ...t, staggeredPort, staggeredStrand };
+
+    nextPort = (staggeredPort % 4) + 1;
     return result;
   });
 }
