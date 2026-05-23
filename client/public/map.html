@@ -182,9 +182,9 @@
     document.getElementById('legend').style.display='block';
     document.getElementById('map').style.display='block';
     wireLegendToggle();
-    wireLocToggle();
     var center=PFP?{lat:PFP.lat,lng:PFP.lng}:(TERMS[0]?{lat:TERMS[0].lat,lng:TERMS[0].lng}:{lat:0,lng:0});
     MAP=new google.maps.Map(document.getElementById('map'),{zoom:12,center:center});
+    wireLocToggle();
     var bounds=new google.maps.LatLngBounds();
     if(PFP){var pm=new google.maps.Marker({map:MAP,position:{lat:PFP.lat,lng:PFP.lng},icon:pfpIcon(),title:PFP.name+'\n'+PFP.addr,zIndex:999999});bounds.extend(pm.getPosition());var pinfo=new google.maps.InfoWindow({content:'<b>PFP (starting point)</b><br>'+PFP.name+'<br>'+PFP.addr});pm.addListener('click',function(){pinfo.open({anchor:pm,map:MAP});});}
     var TERM_MARKERS=[];
