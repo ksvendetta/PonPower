@@ -321,6 +321,87 @@ export async function renderEmbeddedMap(
   return { pfpLocation, distances, resolved, failed, elapsedSec };
 }
 
+// Live user-location overlay. Stays in its own state object so it survives map
+// re-renders and isn't bundled into the shared-link payload.
+export interface UserLocationState {
+  marker?: any;
+  accuracyCircle?: any;
+  watchId?: number;
+  panned?: boolean;
+}
+
+export function startUserLocation(
+  gmap: any,
+  state: UserLocationState,
+  onError?: (msg: string) => void,
+  options?: { panOnFirstFix?: boolean },
+): void {
+  if (typeof navigator === 'undefined' || !navigator.geolocation) {
+    onError?.('Geolocation is not supported by this browser.');
+    return;
+  }
+  if (!gmap || state.watchId != null) return;
+  const panOnFirstFix = options?.panOnFirstFix !== false;
+
+  const upsert = (lat: number, lng: number, accuracy: number) => {
+    const pos = new window.google.maps.LatLng(lat, lng);
+    if (!state.marker) {
+      state.marker = new window.google.maps.Marker({
+        map: gmap,
+        position: pos,
+        title: 'Your location',
+        icon: {
+          path: window.google.maps.SymbolPath.CIRCLE,
+          scale: 7,
+          fillColor: '#4285F4',
+          fillOpacity: 1,
+          strokeColor: '#ffffff',
+          strokeWeight: 2,
+        },
+        zIndex: 10000000,
+      });
+      state.accuracyCircle = new window.google.maps.Circle({
+        map: gmap,
+        center: pos,
+        radius: accuracy,
+        fillColor: '#4285F4',
+        fillOpacity: 0.12,
+        strokeColor: '#4285F4',
+        strokeOpacity: 0.35,
+        strokeWeight: 1,
+        clickable: false,
+      });
+    } else {
+      state.marker.setPosition(pos);
+      state.accuracyCircle?.setCenter(pos);
+      state.accuracyCircle?.setRadius(accuracy);
+    }
+    // Pan to the user only on the first successful fix — don't yank the
+    // viewport on every update. Skipped on auto-start so the terminal
+    // fitBounds isn't overridden.
+    if (!state.panned) {
+      state.panned = true;
+      if (panOnFirstFix) gmap.panTo(pos);
+    }
+  };
+
+  state.watchId = navigator.geolocation.watchPosition(
+    (pos) => upsert(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy),
+    (err) => onError?.(err.message || 'Could not read GPS location.'),
+    { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 },
+  );
+}
+
+export function stopUserLocation(state: UserLocationState): void {
+  if (state.watchId != null && typeof navigator !== 'undefined' && navigator.geolocation) {
+    navigator.geolocation.clearWatch(state.watchId);
+  }
+  state.watchId = undefined;
+  if (state.marker) { state.marker.setMap(null); state.marker = undefined; }
+  if (state.accuracyCircle) { state.accuracyCircle.setMap(null); state.accuracyCircle = undefined; }
+  state.panned = false;
+}
+
 export function geocodeAllBiased(geocoder: any, query: string, bounds: any): Promise<GeocodeHit[]> {
   return new Promise((resolve) => {
     geocoder.geocode({
@@ -676,24 +757,31 @@ export function buildOpenInNewTabHtml(
   .legend .sw { display: inline-block; width: 10px; height: 10px; margin-right: 4px; border-radius: 50%; vertical-align: middle; }
   .legend label { display: flex; align-items: center; gap: 6px; margin-top: 8px; cursor: pointer; user-select: none; }
   .legend label input { margin: 0; }
+  .legend-toggle { background: none; border: none; cursor: pointer; padding: 0; font: inherit; font-weight: 600; color: #333; display: flex; align-items: center; gap: 4px; margin-bottom: 4px; }
+  .legend-toggle:hover { color: #000; }
+  .legend-toggle .chev { display: inline-block; transition: transform 0.15s ease; }
+  .legend-toggle.collapsed .chev { transform: rotate(-90deg); }
 </style>
 </head><body>
 <div class="legend">
-  <div><span class="sw" style="background:#d32f2f"></span> PFP (starting point)</div>
-  <div style="margin-top:6px; font-weight:600;">Terminal (Pon count)</div>
-  <div style="display:grid; grid-template-columns:auto auto; gap:2px 10px; margin-top:2px;">
-    <div><span class="sw" style="background:#2962ff"></span>1-99</div>
-    <div><span class="sw" style="background:#ff6f00"></span>100-199</div>
-    <div><span class="sw" style="background:#2e7d32"></span>200-299</div>
-    <div><span class="sw" style="background:#6d4c41"></span>300-399</div>
-    <div><span class="sw" style="background:#607d8b"></span>400-499</div>
-    <div><span class="sw" style="background:#ffffff; border:1px solid #bbb;"></span>500-599</div>
-    <div><span class="sw" style="background:#d32f2f"></span>600-699</div>
-    <div><span class="sw" style="background:#212121"></span>700-799</div>
-    <div><span class="sw" style="background:#fbc02d"></span>800-899</div>
-    <div><span class="sw" style="background:#8e24aa"></span>900-999</div>
+  <button id="legendToggle" class="legend-toggle" type="button"><span class="chev">&#9662;</span> Color legend</button>
+  <div id="legendCodes">
+    <div><span class="sw" style="background:#d32f2f"></span> PFP (starting point)</div>
+    <div style="margin-top:6px; font-weight:600;">Terminal (Pon count)</div>
+    <div style="display:grid; grid-template-columns:auto auto; gap:2px 10px; margin-top:2px;">
+      <div><span class="sw" style="background:#2962ff"></span>1-99</div>
+      <div><span class="sw" style="background:#ff6f00"></span>100-199</div>
+      <div><span class="sw" style="background:#2e7d32"></span>200-299</div>
+      <div><span class="sw" style="background:#6d4c41"></span>300-399</div>
+      <div><span class="sw" style="background:#607d8b"></span>400-499</div>
+      <div><span class="sw" style="background:#ffffff; border:1px solid #bbb;"></span>500-599</div>
+      <div><span class="sw" style="background:#d32f2f"></span>600-699</div>
+      <div><span class="sw" style="background:#212121"></span>700-799</div>
+      <div><span class="sw" style="background:#fbc02d"></span>800-899</div>
+      <div><span class="sw" style="background:#8e24aa"></span>900-999</div>
+    </div>
+    <div style="margin-top:4px; color:#666;">${terms.length} terminals${pfp ? ' — from ' + escHtml(pfp.addr) : ''}</div>
   </div>
-  <div style="margin-top:4px; color:#666;">${terms.length} terminals${pfp ? ' — from ' + escHtml(pfp.addr) : ''}</div>
   <label><input type="checkbox" id="connToggle" ${showConnections ? 'checked' : ''}/> Connect pins by strand order</label>
   <div style="margin-top:6px; display:flex; gap:6px; align-items:center;">
     <input type="number" id="ponSearch" placeholder="Find Pon count" min="0" style="flex:1; width:110px; padding:3px 6px; font:12px inherit; border:1px solid #bbb; border-radius:4px;" />
@@ -717,7 +805,7 @@ export function buildOpenInNewTabHtml(
   function terminalIcon(label,port){var key=label+'|'+(port==null?'':port);if(TERM_ICONS[key])return TERM_ICONS[key];var display=(port!=null)?('P'+port+'·'+label):label;var w=Math.max(28,10+String(display).length*7),h=22,iX=0.75,iY=0.75,iW=w-1.5,iH=h-1.5,rx=6;var weights=ponBucketWeights(label),total=0;for(var i=0;i<weights.length;i++)total+=weights[i];var body;if(total===0){body='<rect x="'+iX+'" y="'+iY+'" width="'+iW+'" height="'+iH+'" rx="'+rx+'" fill="'+PON_BUCKET_COLORS[0]+'"/>';}else{var parts='',x=iX;for(var j=0;j<weights.length;j++){if(!weights[j])continue;var sw=(weights[j]/total)*iW;parts+='<rect x="'+x+'" y="'+iY+'" width="'+sw+'" height="'+iH+'" fill="'+PON_BUCKET_COLORS[j]+'"/>';x+=sw;}body='<defs><clipPath id="ponClip"><rect x="'+iX+'" y="'+iY+'" width="'+iW+'" height="'+iH+'" rx="'+rx+'"/></clipPath></defs><g clip-path="url(#ponClip)">'+parts+'</g>';}body+='<rect x="'+iX+'" y="'+iY+'" width="'+iW+'" height="'+iH+'" rx="'+rx+'" fill="none" stroke="white" stroke-width="1.5"/>';var dI=0,dV=-1;for(var k=0;k<weights.length;k++)if(weights[k]>dV){dV=weights[k];dI=k;}var tF=PON_LIGHT_BUCKETS[dI]?'#000':'#fff';var svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+w+'" height="'+h+'" viewBox="0 0 '+w+' '+h+'">'+body+'<text x="'+(w/2)+'" y="'+(h-6)+'" text-anchor="middle" font-family="Arial,sans-serif" font-size="12" font-weight="bold" fill="'+tF+'">'+display+'</text></svg>';TERM_ICONS[key]={url:'data:image/svg+xml;charset=UTF-8,'+encodeURIComponent(svg),anchor:new google.maps.Point(w/2,h/2),scaledSize:new google.maps.Size(w,h)};return TERM_ICONS[key];}
   let MAP=null;const LINES=[];function clearLines(){for(const l of LINES)l.setMap(null);LINES.length=0;}
   function drawLines(){clearLines();if(!MAP)return;const ord=TERMS.slice().sort((a,b)=>a.minStrand-b.minStrand);let prev=null;for(const t of ord){const pos=new google.maps.LatLng(t.lat,t.lng);if(prev){LINES.push(new google.maps.Polyline({path:[prev,pos],geodesic:true,strokeColor:'#ff6f00',strokeOpacity:0.9,strokeWeight:3,icons:[{icon:{path:google.maps.SymbolPath.FORWARD_CLOSED_ARROW,scale:4,strokeColor:'#ff6f00',fillColor:'#ff6f00',fillOpacity:1},offset:'92%'}],map:MAP}));}prev=pos;}}
-  function initMap(){const center=PFP?{lat:PFP.lat,lng:PFP.lng}:{lat:TERMS[0].lat,lng:TERMS[0].lng};MAP=new google.maps.Map(document.getElementById('map'),{zoom:12,center});const bounds=new google.maps.LatLngBounds();if(PFP){const m=new google.maps.Marker({map:MAP,position:{lat:PFP.lat,lng:PFP.lng},icon:pfpIcon(),title:PFP.name+'\\n'+PFP.addr,zIndex:999999});bounds.extend(m.getPosition());const info=new google.maps.InfoWindow({content:'<b>PFP (starting point)</b><br>'+PFP.name+'<br>'+PFP.addr});m.addListener('click',()=>info.open({anchor:m,map:MAP}));}var TERM_MARKERS=[];for(const t of TERMS){const m=new google.maps.Marker({map:MAP,position:{lat:t.lat,lng:t.lng},icon:terminalIcon(t.strands,t.port),title:t.name});m._strandNums=Array.isArray(t.strandNums)?t.strandNums:[];TERM_MARKERS.push(m);bounds.extend(m.getPosition());const info=new google.maps.InfoWindow({content:'<b>'+t.name+'</b><br>'+t.addr+'<br>Strands: '+t.strands+(t.port!=null?'<br>Test Port: '+t.port:'')+(t.waldo?'<br>Waldo: '+t.waldo:'')+(t.dist?'<br>Distance from PFP: '+t.dist:'')});m.addListener('click',()=>info.open({anchor:m,map:MAP}));}MAP.fitBounds(bounds,40);const tg=document.getElementById('connToggle');tg.addEventListener('change',()=>{if(tg.checked)drawLines();else clearLines();});if(tg.checked)drawLines();var sI=document.getElementById('ponSearch'),sB=document.getElementById('ponSearchBtn'),sS=document.getElementById('ponSearchStatus');function flashPon(){var raw=(sI.value||'').trim();if(!raw)return;var n=parseInt(raw,10);if(isNaN(n)){sS.textContent='Enter a numeric Pon count.';sS.style.color='#b71c1c';return;}var matches=TERM_MARKERS.filter(function(mk){return mk._strandNums&&mk._strandNums.indexOf(n)!==-1;});if(!matches.length){sS.textContent='No terminal contains Pon count '+n+'.';sS.style.color='#b71c1c';return;}MAP.panTo(matches[0].getPosition());matches.forEach(function(mk){mk.setAnimation(google.maps.Animation.BOUNCE);});setTimeout(function(){matches.forEach(function(mk){mk.setAnimation(null);});},3000);sS.textContent='Flashing '+matches.length+' terminal'+(matches.length>1?'s':'')+' with Pon count '+n+'.';sS.style.color='#1b5e20';}sB.addEventListener('click',flashPon);sI.addEventListener('keydown',function(e){if(e.key==='Enter')flashPon();});}
+  function initMap(){var lt=document.getElementById('legendToggle');var lc=document.getElementById('legendCodes');if(lt&&lc){lt.addEventListener('click',function(){var h=lc.style.display==='none';lc.style.display=h?'':'none';lt.classList.toggle('collapsed',!h);});}const center=PFP?{lat:PFP.lat,lng:PFP.lng}:{lat:TERMS[0].lat,lng:TERMS[0].lng};MAP=new google.maps.Map(document.getElementById('map'),{zoom:12,center});const bounds=new google.maps.LatLngBounds();if(PFP){const m=new google.maps.Marker({map:MAP,position:{lat:PFP.lat,lng:PFP.lng},icon:pfpIcon(),title:PFP.name+'\\n'+PFP.addr,zIndex:999999});bounds.extend(m.getPosition());const info=new google.maps.InfoWindow({content:'<b>PFP (starting point)</b><br>'+PFP.name+'<br>'+PFP.addr});m.addListener('click',()=>info.open({anchor:m,map:MAP}));}var TERM_MARKERS=[];for(const t of TERMS){const m=new google.maps.Marker({map:MAP,position:{lat:t.lat,lng:t.lng},icon:terminalIcon(t.strands,t.port),title:t.name});m._strandNums=Array.isArray(t.strandNums)?t.strandNums:[];TERM_MARKERS.push(m);bounds.extend(m.getPosition());const info=new google.maps.InfoWindow({content:'<b>'+t.name+'</b><br>'+t.addr+'<br>Strands: '+t.strands+(t.port!=null?'<br>Test Port: '+t.port:'')+(t.waldo?'<br>Waldo: '+t.waldo:'')+(t.dist?'<br>Distance from PFP: '+t.dist:'')});m.addListener('click',()=>info.open({anchor:m,map:MAP}));}MAP.fitBounds(bounds,40);const tg=document.getElementById('connToggle');tg.addEventListener('change',()=>{if(tg.checked)drawLines();else clearLines();});if(tg.checked)drawLines();var sI=document.getElementById('ponSearch'),sB=document.getElementById('ponSearchBtn'),sS=document.getElementById('ponSearchStatus');function flashPon(){var raw=(sI.value||'').trim();if(!raw)return;var n=parseInt(raw,10);if(isNaN(n)){sS.textContent='Enter a numeric Pon count.';sS.style.color='#b71c1c';return;}var matches=TERM_MARKERS.filter(function(mk){return mk._strandNums&&mk._strandNums.indexOf(n)!==-1;});if(!matches.length){sS.textContent='No terminal contains Pon count '+n+'.';sS.style.color='#b71c1c';return;}MAP.panTo(matches[0].getPosition());matches.forEach(function(mk){mk.setAnimation(google.maps.Animation.BOUNCE);});setTimeout(function(){matches.forEach(function(mk){mk.setAnimation(null);});},3000);sS.textContent='Flashing '+matches.length+' terminal'+(matches.length>1?'s':'')+' with Pon count '+n+'.';sS.style.color='#1b5e20';}sB.addEventListener('click',flashPon);sI.addEventListener('keydown',function(e){if(e.key==='Enter')flashPon();});}
   window.gm_authFailure=function(){document.body.insertAdjacentHTML('afterbegin','<div style="padding:12px;background:#ffebee;color:#b71c1c;font:13px sans-serif;">Google Maps rejected the API key.</div>');};
 <\/script>
 <script src="https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&callback=initMap" async defer><\/script>

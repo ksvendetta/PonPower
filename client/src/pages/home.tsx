@@ -36,6 +36,7 @@ import {
   GeocodeHit, loadGeocodeCache, renderEmbeddedMap, autoResolveCity,
   drawConnections, clearConnections, flashPonOnMap, buildOpenInNewTabHtml,
   buildShareData, buildMapViewerUrl,
+  startUserLocation, stopUserLocation, UserLocationState,
 } from "@/lib/exfo-maps";
 import QRCode from "qrcode";
 
@@ -53,7 +54,7 @@ async function tryBuildQrDataUrl(url: string): Promise<string | null> {
   }
 }
 import { AppToggle } from "@/components/app-toggle";
-import { Download, FileJson, Copy, Save, FileSpreadsheet, Settings, MapPin, ExternalLink, Search, Share2 } from "lucide-react";
+import { Download, FileJson, Copy, Save, FileSpreadsheet, Settings, MapPin, ExternalLink, Search, Share2, Locate } from "lucide-react";
 
 const API_KEY_STORAGE = "f2job.gmapsApiKey";
 const API_KEY_SEEDED = "f2job.gmapsApiKey.seeded";
@@ -94,10 +95,12 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
   const [shareQrDataUrl, setShareQrDataUrl] = useState<string | null>(null);
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
   const [sharing, setSharing] = useState(false);
+  const [showMyLocation, setShowMyLocation] = useState(true);
   const mapCanvasRef = useRef<HTMLDivElement>(null);
   const mapStateRef = useRef<{
     gmap: any | null; gmarkers: any[]; connections: any[]; showConnections: boolean;
   }>({ gmap: null, gmarkers: [], connections: [], showConnections: false });
+  const userLocStateRef = useRef<UserLocationState>({});
   const geocodeCacheRef = useRef<Map<string, GeocodeHit>>(new Map());
 
   // Load API key + cache once
@@ -419,6 +422,56 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
       setMapStatusKind("ok");
     }
   };
+
+  const handleToggleMyLocation = () => {
+    if (showMyLocation) {
+      stopUserLocation(userLocStateRef.current);
+      setShowMyLocation(false);
+      return;
+    }
+    if (!mapStateRef.current.gmap) {
+      setMapStatus("Load the map first.");
+      setMapStatusKind("err");
+      return;
+    }
+    startUserLocation(mapStateRef.current.gmap, userLocStateRef.current, (msg) => {
+      setMapStatus(msg);
+      setMapStatusKind("err");
+      setShowMyLocation(false);
+    });
+    setShowMyLocation(true);
+  };
+
+  // Stop GPS watch when the component unmounts or the file changes
+  // (the old gmap reference is dropped when a new file is uploaded).
+  useEffect(() => {
+    return () => { stopUserLocation(userLocStateRef.current); };
+  }, []);
+  useEffect(() => {
+    if (file) {
+      // Clear the watch and old marker; the auto-start effect below
+      // re-attaches a fresh marker once the new map renders.
+      stopUserLocation(userLocStateRef.current);
+    }
+  }, [file]);
+
+  // Auto-start GPS tracking once the map is up, since "Show my location"
+  // defaults to On. Skips panning so the terminal fitBounds isn't overridden.
+  useEffect(() => {
+    if (!mapLoaded || !showMyLocation) return;
+    if (!mapStateRef.current.gmap) return;
+    if (userLocStateRef.current.watchId != null) return;
+    startUserLocation(
+      mapStateRef.current.gmap,
+      userLocStateRef.current,
+      (msg) => {
+        setMapStatus(msg);
+        setMapStatusKind("err");
+        setShowMyLocation(false);
+      },
+      { panOnFirstFix: false },
+    );
+  }, [mapLoaded, showMyLocation]);
 
   const maxDistance = (() => {
     let m: number | null = null;
@@ -837,6 +890,9 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
                 </Button>
                 <Button onClick={handleShareLink} variant="outline" size="sm" className="gap-1.5" disabled={!mapLoaded || sharing}>
                   <Share2 className="w-3.5 h-3.5" /> {sharing ? "Building link…" : "Share link"}
+                </Button>
+                <Button onClick={handleToggleMyLocation} variant="outline" size="sm" className="gap-1.5" disabled={!mapLoaded}>
+                  <Locate className="w-3.5 h-3.5" /> {showMyLocation ? "Hide my location" : "Show my location"}
                 </Button>
                 <label className="flex items-center gap-2 text-xs cursor-pointer">
                   <Switch checked={showConnections} onCheckedChange={setShowConnections} />
