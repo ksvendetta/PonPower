@@ -557,17 +557,23 @@ export interface ExportColumn {
 }
 
 export const EXPORT_COLUMNS: ExportColumn[] = [
+  { label: '#', width: 5 },
   { label: 'Terminal', width: 24 },
+  { label: 'Waldo ID', width: 12 },
   { label: 'PON Count', width: 11 },
   { label: 'Total Strands', width: 14 },
   { label: 'Test Port', width: 11 },
   { label: 'Test Strand', width: 12 },
   { label: 'Estm FT', width: 10 },
   { label: 'Real FT', width: 10 },
-  { label: 'Fail', width: 10 },
+  { label: 'Failed Strand', width: 13 },
   { label: 'Lost', width: 10 },
   { label: '@FT', width: 10 },
+  { label: 'Task', width: 14 },
 ];
+
+// Column index (1-based in ExcelJS) of the Terminal column — used for left-align.
+const TERMINAL_COL = 2;
 
 export async function generateConvertedXlsx(
   terminals: Terminal[],
@@ -595,22 +601,23 @@ export async function generateConvertedXlsx(
   const hasQr = !!(shareUrl && shareUrl.trim() && shareUrl.length <= 1800);
 
   // With a QR: row 1 is a small caption strip ("Scan QR for Map") sitting above the QR
-  // in cols 9-10; row 2 holds PFP / PROJECT / CABLE ID plus the QR itself; row 3 holds
-  // TOTAL STRANDS / TERMINALS. Without QR: original single-row 5-block layout.
+  // in cols 12-13; row 2 holds PFP / PROJECT / CABLE ID plus the QR itself; row 3 holds
+  // TOTAL STRANDS / TERMINALS. Without QR: original single-row 5-block layout, stretched
+  // across all 13 columns.
   const metaBlocks: Array<[number, number, number, string, string]> = hasQr
     ? [
-        [2, 1, 2, 'PFP', meta.pfpName || ''],
-        [2, 3, 5, 'PROJECT', meta.project || ''],
-        [2, 6, 8, 'CABLE ID', cableId],
-        [3, 1, 5, 'TOTAL STRANDS', totalStrandsCount],
-        [3, 6, 10, 'TERMINALS', terminalCount],
+        [2, 1, 3, 'PFP', meta.pfpName || ''],
+        [2, 4, 7, 'PROJECT', meta.project || ''],
+        [2, 8, 11, 'CABLE ID', cableId],
+        [3, 1, 6, 'TOTAL STRANDS', totalStrandsCount],
+        [3, 7, 13, 'TERMINALS', terminalCount],
       ]
     : [
-        [1, 1, 2, 'PFP', meta.pfpName || ''],
-        [1, 3, 4, 'PROJECT', meta.project || ''],
-        [1, 5, 6, 'CABLE ID', cableId],
-        [1, 7, 8, 'TOTAL STRANDS', totalStrandsCount],
-        [1, 9, 10, 'TERMINALS', terminalCount],
+        [1, 1, 3, 'PFP', meta.pfpName || ''],
+        [1, 4, 6, 'PROJECT', meta.project || ''],
+        [1, 7, 9, 'CABLE ID', cableId],
+        [1, 10, 11, 'TOTAL STRANDS', totalStrandsCount],
+        [1, 12, 13, 'TERMINALS', terminalCount],
       ];
   for (const [row, c0, c1, label, value] of metaBlocks) {
     ws.mergeCells(row, c0, row, c1);
@@ -627,8 +634,8 @@ export async function generateConvertedXlsx(
   if (hasQr) {
     // Row 1 holds the caption above the QR; row 2 carries the QR image itself.
     try {
-      ws.mergeCells(1, 9, 1, 10);
-      const captionCell = ws.getCell(1, 9);
+      ws.mergeCells(1, 12, 1, 13);
+      const captionCell = ws.getCell(1, 12);
       captionCell.value = 'Scan QR for Map';
       captionCell.font = { bold: true, size: 10 };
       captionCell.alignment = { horizontal: 'center', vertical: 'middle' };
@@ -641,10 +648,10 @@ export async function generateConvertedXlsx(
         errorCorrectionLevel: 'M',
       });
       const imageId = wb.addImage({ base64: dataUrl, extension: 'png' });
-      // Center an 84px QR inside cols 9-10 (each width 10 ≈ 70px → ~140px combined).
-      // Offset ≈ (140-84)/2 / 70 = 0.4 into col 9 → tl.col = 8.4 (zero-indexed).
+      // Center an 84px QR inside cols 12-13 (col 12 width 10 ≈ 75px, col 13 width 14 ≈ 103px,
+      // combined ~178px). Offset ≈ (178-84)/2 / 75 ≈ 0.63 into col 12 → tl.col = 11.63.
       ws.addImage(imageId, {
-        tl: { col: 8.4, row: 1.05 } as any,
+        tl: { col: 11.63, row: 1.05 } as any,
         ext: { width: 84, height: 84 },
       });
     } catch (err) {
@@ -665,7 +672,7 @@ export async function generateConvertedXlsx(
       fgColor: { argb: 'FFD9E1F2' },
     };
     cell.alignment = {
-      horizontal: i === 0 ? 'left' : 'center',
+      horizontal: i + 1 === TERMINAL_COL ? 'left' : 'center',
       vertical: 'middle',
       wrapText: true,
     };
@@ -682,6 +689,7 @@ export async function generateConvertedXlsx(
 
   let r = headerRowNum + 1;
   let zebraIndex = 0;
+  let rowCounter = 1;
   const zebraFill = {
     type: 'pattern' as const,
     pattern: 'solid' as const,
@@ -689,20 +697,22 @@ export async function generateConvertedXlsx(
   };
   for (const t of terminals) {
     if (t.staggeredPort === undefined || t.staggeredStrand === undefined) continue;
-    ws.getCell(r, 1).value = t.terminalName;
-    ws.getCell(r, 2).value = ponCountForTerminal(t);
-    ws.getCell(r, 3).value = t.totalStrands;
-    ws.getCell(r, 4).value = t.staggeredPort;
-    ws.getCell(r, 5).value = t.staggeredStrand;
+    ws.getCell(r, 1).value = rowCounter++;
+    ws.getCell(r, 2).value = t.terminalName;
+    ws.getCell(r, 3).value = t.waldoId || '';
+    ws.getCell(r, 4).value = ponCountForTerminal(t);
+    ws.getCell(r, 5).value = t.totalStrands;
+    ws.getCell(r, 6).value = t.staggeredPort;
+    ws.getCell(r, 7).value = t.staggeredStrand;
     const ft = footageByRowIndex?.get(t.rowIndex);
     if (ft != null && !Number.isNaN(ft)) {
-      const cell = ws.getCell(r, 6);
+      const cell = ws.getCell(r, 8);
       cell.value = Math.round(ft);
       cell.numFmt = '#,##0';
     }
-    // Column 7 (Real FT / Fail / Lost / @FT) is left blank for manual entry.
-    for (let c = 2; c <= lastCol; c++) {
-      ws.getCell(r, c).alignment = { horizontal: 'center' };
+    // Cols 9-13 (Real FT / Failed Strand / Lost / @FT / Task) are left blank for manual entry.
+    for (let c = 1; c <= lastCol; c++) {
+      ws.getCell(r, c).alignment = { horizontal: c === TERMINAL_COL ? 'left' : 'center' };
     }
     for (let c = 1; c <= lastCol; c++) {
       ws.getCell(r, c).border = {
@@ -722,9 +732,26 @@ export async function generateConvertedXlsx(
   }
 
   // Repeat the column-header row (row 3) at the top of every printed page.
+  // Landscape + fit-to-width-1 keeps all 13 columns on a single page across.
   ws.pageSetup = {
     ...(ws.pageSetup || {}),
     printTitlesRow: `${headerRowNum}:${headerRowNum}`,
+    orientation: 'landscape',
+    fitToPage: true,
+    fitToWidth: 1,
+    fitToHeight: 0, // let rows flow across as many pages as needed
+    horizontalCentered: true,
+    margins: {
+      left: 0.4, right: 0.4, top: 0.5, bottom: 0.5, header: 0.3, footer: 0.3,
+    },
+  };
+
+  // Centered "Page X of Y" footer on every printed page.
+  // &P = current page, &N = total pages, &C = center section.
+  ws.headerFooter = {
+    ...(ws.headerFooter || {}),
+    oddFooter: '&CPage &P of &N',
+    evenFooter: '&CPage &P of &N',
   };
 
   const buf = await wb.xlsx.writeBuffer();

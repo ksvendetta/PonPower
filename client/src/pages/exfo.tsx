@@ -52,7 +52,11 @@ const DEFAULT_API_KEY = 'AIzaSyDWvptOInAO5y7O5pHtVj0GhFQ9aVeYIMc';
 
 type StateBadge = { text: string; tone: 'idle' | 'ready' | 'fail' };
 
-export default function Exfo() {
+interface ExfoProps {
+  publicMode?: boolean;
+}
+
+export default function Exfo({ publicMode = false }: ExfoProps = {}) {
   const { toast } = useToast();
   const [parsed, setParsed] = useState<ExfoXlsxParse | null>(null);
   const [fileName, setFileName] = useState('No file chosen.');
@@ -473,7 +477,11 @@ export default function Exfo() {
     <div className="min-h-screen bg-background p-6 md:p-12 font-sans text-foreground">
       <div className="max-w-6xl mx-auto space-y-8">
         <div className="flex justify-center">
-          <AppToggle active="exfo" />
+          <AppToggle
+            active="exfo"
+            publicMode={publicMode}
+            keys={publicMode ? ["ponpower", "exfo"] : undefined}
+          />
         </div>
 
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-border pb-6">

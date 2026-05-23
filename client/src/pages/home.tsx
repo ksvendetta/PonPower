@@ -59,7 +59,11 @@ const API_KEY_STORAGE = "f2job.gmapsApiKey";
 const API_KEY_SEEDED = "f2job.gmapsApiKey.seeded";
 const DEFAULT_API_KEY = "AIzaSyDWvptOInAO5y7O5pHtVj0GhFQ9aVeYIMc";
 
-export default function Home() {
+interface HomeProps {
+  publicMode?: boolean;
+}
+
+export default function Home({ publicMode = false }: HomeProps = {}) {
   const { toast } = useToast();
   const [file, setFile] = useState<File | null>(null);
   const [fileHandle, setFileHandle] = useState<FileSystemFileHandle | null>(null);
@@ -214,6 +218,16 @@ export default function Home() {
       }
     }
   }, [cableId, strands, averageLoss, wireCenterClli, cfas]);
+
+  // Auto-load the map after a fresh upload, mirroring F2 Exfo's behavior.
+  // The check on mapLoaded prevents re-entry after the first successful render.
+  useEffect(() => {
+    if (!parsedExfo || parsedExfo.terminals.length === 0) return;
+    if (!apiKey.trim() || mapLoaded) return;
+    if (!mapCanvasRef.current) return;
+    handleLoadMap();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [parsedExfo, apiKey]);
 
   const handleSave = () => {
     try {
@@ -516,7 +530,11 @@ export default function Home() {
 
         {/* Top center: app toggle */}
         <div className="flex justify-center">
-          <AppToggle active="ponpower" />
+          <AppToggle
+            active="ponpower"
+            publicMode={publicMode}
+            keys={publicMode ? ["ponpower", "exfo"] : undefined}
+          />
         </div>
 
         {/* Header */}
@@ -544,10 +562,10 @@ export default function Home() {
           )}
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+        <div className={publicMode ? "max-w-2xl mx-auto" : "grid grid-cols-1 lg:grid-cols-12 gap-8"}>
 
           {/* Left Column: Inputs */}
-          <div className="lg:col-span-5 space-y-6">
+          <div className={publicMode ? "" : "lg:col-span-5 space-y-6"}>
 
             {/* Step 1: Upload */}
             <Card className="border-border/50 bg-card/50 backdrop-blur-sm shadow-lg">
@@ -570,6 +588,8 @@ export default function Home() {
               </CardContent>
             </Card>
 
+            {!publicMode && (
+            <>
             {/* Step 2: Configure */}
             <Card className="border-border/50 bg-card/50 backdrop-blur-sm shadow-lg">
               <CardHeader>
@@ -648,9 +668,11 @@ export default function Home() {
                 </div>
               </CardContent>
             </Card>
+            </>
+            )}
           </div>
 
-          {/* Right Column: Preview */}
+          {!publicMode && (
           <div className="lg:col-span-7 h-full">
             <Card className="h-full flex flex-col border-border/50 bg-card/50 backdrop-blur-sm shadow-lg overflow-hidden">
               <CardHeader className="pb-3 border-b border-border/50 bg-secondary/10">
@@ -686,6 +708,7 @@ export default function Home() {
               </div>
             </Card>
           </div>
+          )}
 
         </div>
 
@@ -740,10 +763,10 @@ export default function Home() {
                   <Table className="font-mono text-xs">
                     <TableHeader className="sticky top-0 bg-secondary/40 backdrop-blur-sm z-10">
                       <TableRow>
-                        {EXPORT_COLUMNS.map((c, i) => (
+                        {EXPORT_COLUMNS.map((c) => (
                           <TableHead
                             key={c.label}
-                            className={i === 0 ? '' : 'text-center'}
+                            className={c.label === 'Terminal' ? '' : 'text-center'}
                           >
                             {c.label}
                           </TableHead>
@@ -751,11 +774,13 @@ export default function Home() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {staggeredTerminals.map((t) => {
+                      {staggeredTerminals.map((t, i) => {
                         const ft = footageByRowIndex.get(t.rowIndex);
                         return (
                           <TableRow key={t.rowIndex}>
+                            <TableCell className="text-center text-muted-foreground">{i + 1}</TableCell>
                             <TableCell className="whitespace-nowrap">{t.terminalName}</TableCell>
+                            <TableCell className="text-center">{t.waldoId || <span className="text-muted-foreground">—</span>}</TableCell>
                             <TableCell className="text-center">{ponCountForTerminal(t)}</TableCell>
                             <TableCell className="text-center">{t.totalStrands}</TableCell>
                             <TableCell className="text-center text-primary font-bold">{t.staggeredPort}</TableCell>
@@ -763,6 +788,7 @@ export default function Home() {
                             <TableCell className="text-center text-primary font-bold">
                               {ft != null ? Math.round(ft).toLocaleString() : <span className="text-muted-foreground font-normal">—</span>}
                             </TableCell>
+                            <TableCell className="text-center text-muted-foreground">—</TableCell>
                             <TableCell className="text-center text-muted-foreground">—</TableCell>
                             <TableCell className="text-center text-muted-foreground">—</TableCell>
                             <TableCell className="text-center text-muted-foreground">—</TableCell>

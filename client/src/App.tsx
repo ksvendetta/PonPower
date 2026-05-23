@@ -5,35 +5,47 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
 import Home from "@/pages/home";
+import HomePub from "@/pages/home-pub";
+import ExfoPub from "@/pages/exfo-pub";
 import Iolm from "@/pages/iolm";
 import Exfo from "@/pages/exfo";
 import { PasswordGate } from "@/components/password-gate";
 
 const base = import.meta.env.BASE_URL.replace(/\/$/, "");
 
-function Router() {
+function GatedRoutes() {
   return (
-    <WouterRouter base={base}>
+    <PasswordGate>
       <Switch>
-        <Route path="/" component={Home} />
+        <Route path="/">
+          <Home />
+        </Route>
         <Route path="/iolm" component={Iolm} />
-        <Route path="/exfo" component={Exfo} />
+        <Route path="/exfo">
+          <Exfo />
+        </Route>
         <Route component={NotFound} />
       </Switch>
-    </WouterRouter>
+    </PasswordGate>
   );
 }
 
 function App() {
   return (
-    <PasswordGate>
-      <QueryClientProvider client={queryClient}>
-        <TooltipProvider>
-          <Toaster />
-          <Router />
-        </TooltipProvider>
-      </QueryClientProvider>
-    </PasswordGate>
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <Toaster />
+        <WouterRouter base={base}>
+          <Switch>
+            <Route path="/pub" component={HomePub} />
+            <Route path="/pub/exfo" component={ExfoPub} />
+            <Route>
+              <GatedRoutes />
+            </Route>
+          </Switch>
+        </WouterRouter>
+      </TooltipProvider>
+    </QueryClientProvider>
   );
 }
 
