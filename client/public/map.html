@@ -39,11 +39,13 @@
     <div id="termCount" style="margin-top:4px; color:#666;"></div>
   </div>
   <label><input type="checkbox" id="connToggle"/> Connect pins by strand order</label>
+  <label><input type="checkbox" id="locToggle" checked/> Show my location</label>
   <div style="margin-top:6px; display:flex; gap:6px; align-items:center;">
     <input type="number" id="ponSearch" placeholder="Find Pon count" min="0" style="flex:1; width:110px; padding:3px 6px; font:12px inherit; border:1px solid #bbb; border-radius:4px;" />
     <button id="ponSearchBtn" style="padding:3px 8px; font:12px inherit; border:1px solid #bbb; border-radius:4px; background:#eee; cursor:pointer;">Flash</button>
   </div>
   <div id="ponSearchStatus" style="margin-top:4px; color:#666; font-size:11px; min-height:14px;"></div>
+  <div id="locStatus" style="margin-top:2px; color:#666; font-size:11px; min-height:14px;"></div>
 </div>
 <div id="map" style="display:none"></div>
 <script src="https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js"></script>
@@ -140,11 +142,47 @@
       lt.classList.toggle('collapsed',!hidden);
     });
   }
+  var USER_LOC={marker:null,circle:null,watchId:null,panned:false};
+  function startUserLoc(panOnFirstFix){
+    var s=document.getElementById('locStatus');
+    if(!navigator.geolocation){if(s){s.textContent='Geolocation not supported by this browser.';s.style.color='#b71c1c';}return;}
+    if(!MAP||USER_LOC.watchId!=null)return;
+    USER_LOC.watchId=navigator.geolocation.watchPosition(function(p){
+      var pos=new google.maps.LatLng(p.coords.latitude,p.coords.longitude);
+      if(!USER_LOC.marker){
+        USER_LOC.marker=new google.maps.Marker({map:MAP,position:pos,title:'Your location',icon:{path:google.maps.SymbolPath.CIRCLE,scale:7,fillColor:'#4285F4',fillOpacity:1,strokeColor:'#ffffff',strokeWeight:2},zIndex:10000000});
+        USER_LOC.circle=new google.maps.Circle({map:MAP,center:pos,radius:p.coords.accuracy,fillColor:'#4285F4',fillOpacity:0.12,strokeColor:'#4285F4',strokeOpacity:0.35,strokeWeight:1,clickable:false});
+      }else{
+        USER_LOC.marker.setPosition(pos);
+        USER_LOC.circle.setCenter(pos);USER_LOC.circle.setRadius(p.coords.accuracy);
+      }
+      if(!USER_LOC.panned){USER_LOC.panned=true;if(panOnFirstFix)MAP.panTo(pos);}
+      if(s){s.textContent='';}
+    },function(err){
+      if(s){s.textContent=(err&&err.message)||'Could not read GPS location.';s.style.color='#b71c1c';}
+      var t=document.getElementById('locToggle');if(t)t.checked=false;
+      stopUserLoc();
+    },{enableHighAccuracy:true,maximumAge:10000,timeout:20000});
+  }
+  function stopUserLoc(){
+    if(USER_LOC.watchId!=null&&navigator.geolocation){navigator.geolocation.clearWatch(USER_LOC.watchId);}
+    USER_LOC.watchId=null;
+    if(USER_LOC.marker){USER_LOC.marker.setMap(null);USER_LOC.marker=null;}
+    if(USER_LOC.circle){USER_LOC.circle.setMap(null);USER_LOC.circle=null;}
+    USER_LOC.panned=false;
+  }
+  function wireLocToggle(){
+    var t=document.getElementById('locToggle');
+    if(!t)return;
+    t.addEventListener('change',function(){if(t.checked)startUserLoc(true);else stopUserLoc();});
+    if(t.checked)startUserLoc(false);
+  }
   function initMap(){
     document.getElementById('boot').style.display='none';
     document.getElementById('legend').style.display='block';
     document.getElementById('map').style.display='block';
     wireLegendToggle();
+    wireLocToggle();
     var center=PFP?{lat:PFP.lat,lng:PFP.lng}:(TERMS[0]?{lat:TERMS[0].lat,lng:TERMS[0].lng}:{lat:0,lng:0});
     MAP=new google.maps.Map(document.getElementById('map'),{zoom:12,center:center});
     var bounds=new google.maps.LatLngBounds();
