@@ -25,7 +25,7 @@ import {
 } from '@/lib/exfo';
 import {
   GeocodeHit, loadGeocodeCache, renderEmbeddedMap, autoResolveCity,
-  drawConnections, clearConnections, flashPonOnMap, buildOpenInNewTabHtml,
+  drawConnections, clearConnections, flashPonOnMap, buildOpenInNewTabUrl,
 } from '@/lib/exfo-maps';
 
 const DEFAULT_CFG: ExfoJobConfig = {
@@ -372,7 +372,7 @@ export default function Exfo({ publicMode = false }: ExfoProps = {}) {
       return;
     }
     if (!parsed) return;
-    const html = buildOpenInNewTabHtml(
+    const url = buildOpenInNewTabUrl(
       apiKey.trim(),
       parsed.project || cfg.name || 'Terminal map',
       parsed.pfpName,
@@ -380,18 +380,13 @@ export default function Exfo({ publicMode = false }: ExfoProps = {}) {
       city.trim(),
       keptTerminals,
       geocodeCacheRef.current,
-      distances,
-      showConnections
+      showConnections,
     );
-    const w = window.open('', '_blank');
+    const w = window.open(url, '_blank');
     if (!w) {
       setMapStatus('Popup blocked — allow popups for this page.');
       setMapStatusKind('err');
-      return;
     }
-    w.document.open();
-    w.document.write(html);
-    w.document.close();
   };
 
   // Toggle connections on the embedded map

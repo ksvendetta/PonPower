@@ -871,6 +871,24 @@ function longFormUrl(apiKey: string, data: ReturnType<typeof buildShareData>): s
   return `${viewerOrigin()}/map.html#k=${encodeURIComponent(apiKey)}&d=${compressed}`;
 }
 
+// Build a real /map.html URL for "Open in new tab" so the popup gets a
+// proper origin. Writing HTML into about:blank produces an opaque origin
+// where Chrome silently blocks geolocation auto-start.
+export function buildOpenInNewTabUrl(
+  apiKey: string,
+  title: string,
+  pfpName: string | null,
+  pfpLocation: GeocodeHit | null,
+  city: string,
+  terminals: ExfoTerminal[],
+  cache: Map<string, GeocodeHit>,
+  showConnections: boolean,
+  portByRow?: Map<number, number>,
+): string {
+  const data = buildShareData(title, pfpName, pfpLocation, city, terminals, cache, showConnections, portByRow);
+  return longFormUrl(apiKey, data);
+}
+
 // Tries the /api/share endpoint for a short ID-style URL.
 // Falls back to the long-form fragment URL if the server is unavailable.
 export async function buildMapViewerUrl(

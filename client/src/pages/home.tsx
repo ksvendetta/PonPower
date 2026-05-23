@@ -34,7 +34,7 @@ import {
 } from "@/lib/exfo";
 import {
   GeocodeHit, loadGeocodeCache, renderEmbeddedMap, autoResolveCity,
-  drawConnections, clearConnections, flashPonOnMap, buildOpenInNewTabHtml,
+  drawConnections, clearConnections, flashPonOnMap, buildOpenInNewTabUrl,
   buildShareData, buildMapViewerUrl,
   startUserLocation, stopUserLocation, UserLocationState,
 } from "@/lib/exfo-maps";
@@ -365,7 +365,7 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
       setMapStatusKind("err");
       return;
     }
-    const html = buildOpenInNewTabHtml(
+    const url = buildOpenInNewTabUrl(
       apiKey.trim(),
       parsedExfo.project || cableId || "Terminal map",
       parsedExfo.pfpName,
@@ -373,19 +373,14 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
       city.trim(),
       parsedExfo.terminals,
       geocodeCacheRef.current,
-      distances,
       showConnections,
       portByExfoRow,
     );
-    const w = window.open("", "_blank");
+    const w = window.open(url, "_blank");
     if (!w) {
       setMapStatus("Popup blocked — allow popups for this page.");
       setMapStatusKind("err");
-      return;
     }
-    w.document.open();
-    w.document.write(html);
-    w.document.close();
   };
 
   // Toggle connections on map
