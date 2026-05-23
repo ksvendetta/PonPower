@@ -334,14 +334,12 @@ export function startUserLocation(
   gmap: any,
   state: UserLocationState,
   onError?: (msg: string) => void,
-  options?: { panOnFirstFix?: boolean },
 ): void {
   if (typeof navigator === 'undefined' || !navigator.geolocation) {
     onError?.('Geolocation is not supported by this browser.');
     return;
   }
   if (!gmap || state.watchId != null) return;
-  const panOnFirstFix = options?.panOnFirstFix !== false;
 
   const upsert = (lat: number, lng: number, accuracy: number) => {
     const pos = new window.google.maps.LatLng(lat, lng);
@@ -377,11 +375,11 @@ export function startUserLocation(
       state.accuracyCircle?.setRadius(accuracy);
     }
     // Pan to the user only on the first successful fix — don't yank the
-    // viewport on every update. Skipped on auto-start so the terminal
-    // fitBounds isn't overridden.
+    // viewport on every update. Always pans so the blue dot is visible
+    // even when the user is far from the terminal fitBounds view.
     if (!state.panned) {
       state.panned = true;
-      if (panOnFirstFix) gmap.panTo(pos);
+      gmap.panTo(pos);
     }
   };
 

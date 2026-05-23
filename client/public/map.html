@@ -143,7 +143,7 @@
     });
   }
   var USER_LOC={marker:null,circle:null,watchId:null,panned:false};
-  function startUserLoc(panOnFirstFix){
+  function startUserLoc(){
     var s=document.getElementById('locStatus');
     if(!navigator.geolocation){if(s){s.textContent='Geolocation not supported by this browser.';s.style.color='#b71c1c';}return;}
     if(!MAP||USER_LOC.watchId!=null)return;
@@ -156,7 +156,9 @@
         USER_LOC.marker.setPosition(pos);
         USER_LOC.circle.setCenter(pos);USER_LOC.circle.setRadius(p.coords.accuracy);
       }
-      if(!USER_LOC.panned){USER_LOC.panned=true;if(panOnFirstFix)MAP.panTo(pos);}
+      // Always pan on first fix so the blue dot is actually visible even
+      // if the user is far from the terminal fitBounds view.
+      if(!USER_LOC.panned){USER_LOC.panned=true;MAP.panTo(pos);}
       if(s){s.textContent='';}
     },function(err){
       if(s){s.textContent=(err&&err.message)||'Could not read GPS location.';s.style.color='#b71c1c';}
@@ -174,8 +176,14 @@
   function wireLocToggle(){
     var t=document.getElementById('locToggle');
     if(!t)return;
-    t.addEventListener('change',function(){if(t.checked)startUserLoc(true);else stopUserLoc();});
-    if(t.checked)startUserLoc(false);
+    t.addEventListener('change',function(){if(t.checked)startUserLoc();else stopUserLoc();});
+    // Defer the auto-start until the map has finished its first render —
+    // matches what the user sees when manually clicking the box later.
+    if(t.checked){
+      google.maps.event.addListenerOnce(MAP,'idle',function(){
+        if(t.checked)startUserLoc();
+      });
+    }
   }
   function initMap(){
     document.getElementById('boot').style.display='none';

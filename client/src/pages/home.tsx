@@ -451,21 +451,26 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
   }, [file]);
 
   // Auto-start GPS tracking once the map is up, since "Show my location"
-  // defaults to On. Skips panning so the terminal fitBounds isn't overridden.
+  // defaults to On. Waits for the map's first idle so the marker isn't
+  // added mid-render; pans to the user so the blue dot is actually visible.
   useEffect(() => {
     if (!mapLoaded || !showMyLocation) return;
-    if (!mapStateRef.current.gmap) return;
-    if (userLocStateRef.current.watchId != null) return;
-    startUserLocation(
-      mapStateRef.current.gmap,
-      userLocStateRef.current,
-      (msg) => {
+    const gmap = mapStateRef.current.gmap;
+    if (!gmap || userLocStateRef.current.watchId != null) return;
+    const begin = () => {
+      if (!showMyLocation || userLocStateRef.current.watchId != null) return;
+      startUserLocation(gmap, userLocStateRef.current, (msg) => {
         setMapStatus(msg);
         setMapStatusKind("err");
         setShowMyLocation(false);
-      },
-      { panOnFirstFix: false },
-    );
+      });
+    };
+    const w: any = window;
+    if (w.google?.maps?.event) {
+      w.google.maps.event.addListenerOnce(gmap, "idle", begin);
+    } else {
+      begin();
+    }
   }, [mapLoaded, showMyLocation]);
 
   const maxDistance = (() => {
