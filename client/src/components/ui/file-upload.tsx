@@ -4,6 +4,7 @@ import { Upload, FileSpreadsheet, X, CheckCircle2 } from 'lucide-react';
 
 interface FileUploadProps {
   onFileSelect: (file: File, handle?: FileSystemFileHandle | null) => void;
+  onClear?: () => void;
   accept?: string;
   className?: string;
   label?: string;
@@ -21,6 +22,7 @@ interface FileUploadProps {
 
 export function FileUpload({
   onFileSelect,
+  onClear,
   accept = ".xlsx, .xls",
   className,
   label = "Upload Excel Sheet",
@@ -104,6 +106,7 @@ export function FileUpload({
   const clearFile = (e: React.MouseEvent) => {
     e.stopPropagation();
     setFileName(null);
+    onClear?.();
     if (inputRef.current) {
       inputRef.current.value = '';
     }

@@ -19,15 +19,8 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import {
-  parseExcelFile,
   generateReport,
-  parseTerminals,
-  computeStaggeredColumns,
-  generateConvertedXlsx,
-  ponCountForTerminal,
-  EXPORT_COLUMNS,
   Terminal,
-  ParsedWorkbook,
 } from "@/lib/excel";
 import {
   parseExfoXlsx, ExfoXlsxParse, parseAddress, formatDistance, resolveCityFromCLLI,
@@ -56,6 +49,8 @@ async function tryBuildQrDataUrl(url: string): Promise<string | null> {
 import { AppToggle } from "@/components/app-toggle";
 import { Download, FileJson, Copy, Save, FileSpreadsheet, Settings, MapPin, ExternalLink, Search, Share2, Locate } from "lucide-react";
 
+import { preparePonPower, staggeredFilename, PON_HEADERS, type PonPowerResult } from "@/lib/ponpower";
+
 const API_KEY_STORAGE = "f2job.gmapsApiKey";
 const API_KEY_SEEDED = "f2job.gmapsApiKey.seeded";
 const DEFAULT_API_KEY = "AIzaSyDWvptOInAO5y7O5pHtVj0GhFQ9aVeYIMc";
@@ -67,7 +62,9 @@ interface HomeProps {
 export default function Home({ publicMode = false }: HomeProps = {}) {
   const { toast } = useToast();
   const [file, setFile] = useState<File | null>(null);
-  const [fileHandle, setFileHandle] = useState<FileSystemFileHandle | null>(null);
+  const [dataFile, setDataFile] = useState<File | null>(null);
+  const [orcaText, setOrcaText] = useState("");
+  const [conversionError, setConversionError] = useState("");
   const [cableId, setCableId] = useState<string>("");
   const [wireCenterClli, setWireCenterClli] = useState<string>("");
   const [cfas, setCfas] = useState<string>("");
@@ -76,7 +73,7 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
   const [jsonOutput, setJsonOutput] = useState<string>("");
   const [isProcessing, setIsProcessing] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
-  const [parsedWorkbook, setParsedWorkbook] = useState<ParsedWorkbook | null>(null);
+  const [parsedWorkbook, setParsedWorkbook] = useState<PonPowerResult | null>(null);
   const [staggeredTerminals, setStaggeredTerminals] = useState<Terminal[]>([]);
 
   // ----- Map state (mirrors F2 Exfo) -----
@@ -151,7 +148,6 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
   // Parse file when uploaded
   useEffect(() => {
     if (file) {
-      setIsProcessing(true);
       // Reset map state for new file
       setParsedExfo(null);
       setPfpLocation(null);
@@ -171,44 +167,29 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
       file.arrayBuffer()
         .then(ab => { try { setParsedExfo(parseExfoXlsx(ab)); } catch (_) {} })
         .catch(() => {});
-
-      Promise.all([parseExcelFile(file), parseTerminals(file).catch(() => null)])
-        .then(([data, parsed]) => {
-          if (data.cableId) setCableId(data.cableId);
-          if (data.cfas) setCfas(data.cfas);
-          if (data.strands.length > 0) {
-            setStrands(data.strands);
-            toast({
-              title: "Excel Parsed Successfully",
-              description: `Found ${data.strands.length} strands. Cable ID: ${data.cableId || 'Not found'}`,
-            });
-          } else {
-            toast({
-              variant: "destructive",
-              title: "No Data Found",
-              description: "Could not find strand data in the uploaded file.",
-            });
-          }
-          if (parsed && parsed.terminals.length > 0) {
-            const withStaggered = computeStaggeredColumns(parsed.terminals);
-            setParsedWorkbook(parsed);
-            setStaggeredTerminals(withStaggered);
-          } else {
-            setParsedWorkbook(null);
-            setStaggeredTerminals([]);
-          }
-        })
-        .catch((err) => {
-          console.error(err);
-          toast({
-            variant: "destructive",
-            title: "Error Parsing File",
-            description: "Please make sure it's a valid Excel file.",
-          });
-        })
-        .finally(() => setIsProcessing(false));
     }
   }, [file]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setParsedWorkbook(null);
+    setStaggeredTerminals([]);
+    setConversionError("");
+    setStrands([]); setJsonOutput(""); setCableId(""); setCfas("");
+    if (!file || !dataFile) { setIsProcessing(false); return; }
+    setIsProcessing(true);
+    preparePonPower(file, dataFile, orcaText).then(result => {
+      if (cancelled) return;
+      setParsedWorkbook(result);
+      setStaggeredTerminals(result.terminals);
+      setCableId(result.cableId);
+      setCfas(result.project);
+      setStrands(result.terminals.map(t => t.powerTestStrand));
+    }).catch(err => {
+      if (!cancelled) setConversionError(err instanceof Error ? err.message : "Could not read the uploaded files.");
+    }).finally(() => { if (!cancelled) setIsProcessing(false); });
+    return () => { cancelled = true; };
+  }, [file, dataFile, orcaText]);
 
   // Generate JSON when dependencies change
   useEffect(() => {
@@ -483,7 +464,11 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
   // Both parsers point at the same physical xlsx rows: ExfoTerminal.row === Terminal.rowIndex + 1.
   const footageByRowIndex = (() => {
     const m = new Map<number, number>();
-    distances.forEach((v, exfoRow) => { m.set(exfoRow - 1, v); });
+    for (const t of staggeredTerminals) {
+      const original = parsedExfo?.terminals.find(item => item.waldo === t.waldoId && item.terminal === t.terminalName);
+      const distance = original ? distances.get(original.row) : undefined;
+      if (distance != null) m.set(t.rowIndex, distance);
+    }
     return m;
   })();
 
@@ -492,7 +477,8 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
   const portByExfoRow = (() => {
     const m = new Map<number, number>();
     for (const t of staggeredTerminals) {
-      if (t.staggeredPort != null) m.set(t.rowIndex + 1, t.staggeredPort);
+      const original = parsedExfo?.terminals.find(item => item.waldo === t.waldoId && item.terminal === t.terminalName);
+      if (original && t.staggeredPort != null) m.set(original.row, t.staggeredPort);
     }
     return m;
   })();
@@ -525,47 +511,38 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
   const handleDownloadConverted = async () => {
     if (!parsedWorkbook || staggeredTerminals.length === 0) return;
     try {
-      const metaNum = (raw: unknown): number | null => {
-        const n = typeof raw === 'number' ? raw : parseInt(String(raw ?? ''), 10);
-        return Number.isFinite(n) ? n : null;
-      };
-      const metaTerminals = metaNum(parsedExfo?.meta?.terminals) ?? staggeredTerminals.length;
-      const metaTotalStrands =
-        metaNum(parsedExfo?.meta?.totalStrands) ??
-        staggeredTerminals.reduce((sum, t) => sum + (t.totalStrands || 0), 0);
+      const sheet = parsedWorkbook.workbook.getWorksheet(parsedWorkbook.sheetName)!;
+      for (const t of staggeredTerminals) {
+        const footage = footageByRowIndex.get(t.rowIndex);
+        if (footage != null) sheet.getCell(t.rowIndex + 1, 8).value = Math.round(footage);
+      }
       const qrShareUrl = await ensureShareUrl();
-      const qrEligible = !!qrShareUrl && qrShareUrl.length <= QR_URL_MAX_LEN;
-      const bytes = await generateConvertedXlsx(
-        staggeredTerminals,
-        {
-          pfpName: parsedExfo?.pfpName ?? null,
-          project: parsedExfo?.project ?? cfas ?? null,
-          cableId: cableId || null,
-          totalStrands: metaTotalStrands,
-          terminals: metaTerminals,
-        },
-        footageByRowIndex.size > 0 ? footageByRowIndex : undefined,
-        qrEligible ? qrShareUrl : null,
-      );
+      if (qrShareUrl && sheet.getImages().length === 0) {
+        const qr = await tryBuildQrDataUrl(qrShareUrl);
+        if (qr) {
+          const imageId = parsedWorkbook.workbook.addImage({ base64: qr, extension: 'png' });
+          if (!sheet.getCell('L1').isMerged) sheet.mergeCells('L1:M1');
+          sheet.getCell('L1').value = 'Scan QR for Map';
+          sheet.getRow(2).height = 64;
+          sheet.addImage(imageId, { tl: { col: 11.63, row: 1.05 }, ext: { width: 84, height: 84 } });
+        }
+      }
+      const bytes = await parsedWorkbook.workbook.xlsx.writeBuffer();
       const blob = new Blob([bytes], {
         type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      const baseName = file?.name.replace(/\.xlsx$/i, "") || "PONSHEET";
+
       a.href = url;
-      a.download = `${baseName}_staggered.xlsx`;
+      a.download = staggeredFilename(file?.name ?? "PONSHEET.xlsx");
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
       toast({
         title: "Spreadsheet Downloaded",
-        description: qrEligible
-          ? "Converted file saved — QR code links to the shared map."
-          : qrShareUrl
-            ? "Saved without QR — share URL too long to encode."
-            : "Converted file with staggered columns saved.",
+        description: "Staggered PON sheet with Task and Orca tabs downloaded.",
       });
     } catch (e: any) {
       console.error(e);
@@ -628,16 +605,36 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
                   Upload Data
                 </CardTitle>
                 <CardDescription>
-                  Import your field data (.xlsx)
+                  Upload a Ponsheet and its task data export (.xlsx).
                 </CardDescription>
               </CardHeader>
-              <CardContent>
+              <CardContent className="space-y-4">
                 <FileUpload
-                  onFileSelect={(f, h) => {
-                    setFile(f);
-                    setFileHandle(h ?? null);
-                  }}
+                  label="Upload Ponsheet"
+                  helper="Choose your Ponsheet .xlsx workbook"
+                  accept=".xlsx"
+                  onFileSelect={setFile}
+                  onClear={() => setFile(null)}
                 />
+                <FileUpload
+                  label="Upload data file"
+                  helper="Choose the task export, like data.xlsx"
+                  accept=".xlsx"
+                  onFileSelect={setDataFile}
+                  onClear={() => setDataFile(null)}
+                />
+                <div className="space-y-2">
+                  <Label htmlFor="orca-paste">Paste Orca status (optional)</Label>
+                  <Textarea id="orca-paste" value={orcaText} onChange={e => setOrcaText(e.target.value)}
+                    placeholder={"Task\tStatus\n1.478\tC\n1.479\tO"}
+                    className="font-mono text-xs min-h-28" />
+                  <p className="text-xs text-muted-foreground">Copy and paste Orca rows with Task first and Status second. Headers are optional.</p>
+                </div>
+                {conversionError && <p role="alert" className="text-sm text-destructive">{conversionError}</p>}
+                {parsedWorkbook && <p className="text-sm text-muted-foreground">
+                  Matched {parsedWorkbook.matchedTasks} of {parsedWorkbook.terminals.length} terminals to tasks.
+                  {parsedWorkbook.matchedTasks < parsedWorkbook.terminals.length && " Unmatched tasks remain blank. Check that both files are for the same project."}
+                </p>}
               </CardContent>
             </Card>
 
@@ -775,7 +772,7 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
                   Spreadsheet Preview
                 </CardTitle>
                 <CardDescription className="mt-1">
-                  Matches the exported XLSX exactly. Estm FT fills in once Step 5's map is loaded.
+                  Compact PON test sheet with staggered ports and strands, task lookups, and status lookups.
                 </CardDescription>
               </div>
               <Button
@@ -790,73 +787,30 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
           </CardHeader>
           <CardContent className="p-0">
             {staggeredTerminals.length > 0 ? (
-              <>
-                <div className="px-4 py-3 border-b border-border/40 bg-secondary/10 grid grid-cols-2 sm:grid-cols-5 gap-x-6 gap-y-1 text-xs font-mono">
-                  {(() => {
-                    const num = (raw: unknown): number | null => {
-                      const n = typeof raw === 'number' ? raw : parseInt(String(raw ?? ''), 10);
-                      return Number.isFinite(n) ? n : null;
-                    };
-                    const terminalsN = num(parsedExfo?.meta?.terminals) ?? staggeredTerminals.length;
-                    const totalStrandsN =
-                      num(parsedExfo?.meta?.totalStrands) ??
-                      staggeredTerminals.reduce((sum, t) => sum + (t.totalStrands || 0), 0);
-                    return (
-                      <>
-                        <div><span className="text-muted-foreground">PFP:</span> {parsedExfo?.pfpName || <span className="text-muted-foreground">—</span>}</div>
-                        <div><span className="text-muted-foreground">PROJECT:</span> {parsedExfo?.project || cfas || <span className="text-muted-foreground">—</span>}</div>
-                        <div><span className="text-muted-foreground">CABLE ID:</span> {cableId || staggeredTerminals.find(t => t.cableId)?.cableId || <span className="text-muted-foreground">—</span>}</div>
-                        <div><span className="text-muted-foreground">TOTAL STRANDS:</span> {totalStrandsN}</div>
-                        <div><span className="text-muted-foreground">TERMINALS:</span> {terminalsN}</div>
-                      </>
-                    );
-                  })()}
-                </div>
-                <div className="max-h-[500px] overflow-auto">
-                  <Table className="font-mono text-xs">
-                    <TableHeader className="sticky top-0 bg-secondary/40 backdrop-blur-sm z-10">
-                      <TableRow>
-                        {EXPORT_COLUMNS.map((c) => (
-                          <TableHead
-                            key={c.label}
-                            className={c.label === 'Terminal' ? '' : 'text-center'}
-                          >
-                            {c.label}
-                          </TableHead>
+              <div className="max-h-[500px] overflow-auto">
+                <Table className="font-mono text-xs">
+                  <TableHeader className="sticky top-0 bg-secondary/40 backdrop-blur-sm z-10">
+                    <TableRow>
+                      {PON_HEADERS.map(header => <TableHead key={header} className="whitespace-nowrap">{header}</TableHead>)}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {staggeredTerminals.map((t) => (
+                      <TableRow key={t.rowIndex}>
+                        {PON_HEADERS.map((header, i) => (
+                          <TableCell key={header} className="whitespace-nowrap">
+                            {i === 7 && footageByRowIndex.has(t.rowIndex) ? Math.round(footageByRowIndex.get(t.rowIndex)!).toLocaleString() : parsedWorkbook?.workbook.getWorksheet(parsedWorkbook.sheetName)?.getCell(t.rowIndex + 1, i + 1).text}
+                          </TableCell>
                         ))}
                       </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {staggeredTerminals.map((t, i) => {
-                        const ft = footageByRowIndex.get(t.rowIndex);
-                        return (
-                          <TableRow key={t.rowIndex}>
-                            <TableCell className="text-center text-muted-foreground">{i + 1}</TableCell>
-                            <TableCell className="whitespace-nowrap">{t.terminalName}</TableCell>
-                            <TableCell className="text-center">{t.waldoId || <span className="text-muted-foreground">—</span>}</TableCell>
-                            <TableCell className="text-center">{ponCountForTerminal(t)}</TableCell>
-                            <TableCell className="text-center">{t.totalStrands}</TableCell>
-                            <TableCell className="text-center text-primary font-bold">{t.staggeredPort}</TableCell>
-                            <TableCell className="text-center text-primary font-bold">{t.staggeredStrand}</TableCell>
-                            <TableCell className="text-center text-primary font-bold">
-                              {ft != null ? Math.round(ft).toLocaleString() : <span className="text-muted-foreground font-normal">—</span>}
-                            </TableCell>
-                            <TableCell className="text-center text-muted-foreground">—</TableCell>
-                            <TableCell className="text-center text-muted-foreground">—</TableCell>
-                            <TableCell className="text-center text-muted-foreground">—</TableCell>
-                            <TableCell className="text-center text-muted-foreground">—</TableCell>
-                            <TableCell className="text-center text-muted-foreground">—</TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
-                </div>
-              </>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
             ) : (
               <div className="flex flex-col items-center justify-center text-muted-foreground py-16 opacity-50">
                 <FileSpreadsheet className="w-12 h-12 mb-2" />
-                <p>Upload a PON sheet to preview staggered columns</p>
+                <p>Upload both files to preview the staggered sheet</p>
               </div>
             )}
           </CardContent>
