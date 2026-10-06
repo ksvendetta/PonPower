@@ -4,7 +4,6 @@ import { parseTerminals, type Terminal } from './excel';
 
 export const PON_HEADERS = ['#', 'Terminal', 'Waldo ID', 'PON Count', 'Total Strands', 'Test Port', 'Test Strand', 'Estm FT', 'Real FT', 'Failed Strand', 'Lost', '@FT', 'Task', 'Status'];
 const TASK_HEADERS = ['Print.Task', 'FRC', 'WAC', 'Terminal Type', 'Terminal Desc', 'Terminal Count', 'Terminal Address'];
-const addressKey = (value: string) => value.replace(/\s+CFST\s*$/i, '').trim().replace(/\s+/g, ' ').toUpperCase();
 
 export interface PonPowerResult {
   workbook: ExcelJS.Workbook;
@@ -26,7 +25,7 @@ export function staggerPonTerminals(terminals: Terminal[]): Terminal[] {
   });
 }
 
-export async function preparePonPower(ponFile: File, dataFile: File, orcaText = ''): Promise<PonPowerResult> {
+export async function preparePonPower(ponFile: File, dataFile: File | null = null, orcaText = ''): Promise<PonPowerResult> {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(await ponFile.arrayBuffer());
   const source = workbook.worksheets.find(s => s.getCell('B5').text === 'Terminal') ?? workbook.worksheets[0];
@@ -88,29 +87,34 @@ export async function preparePonPower(ponFile: File, dataFile: File, orcaText = 
   }
   if (!terminals.length) throw new Error('No terminals found in the Ponsheet.');
 
-  const data = XLSX.read(await dataFile.arrayBuffer(), { type: 'array' });
-  const rows = data.SheetNames.map(name => XLSX.utils.sheet_to_json<string[]>(data.Sheets[name], { header: 1, defval: '' }))
-    .find(rows => TASK_HEADERS.every(h => rows[0]?.some(value => String(value).trim() === h)));
-  if (!rows) throw new Error('Data file must contain Print.Task, FRC, WAC, Terminal Type, Terminal Desc, Terminal Count, and Terminal Address headers.');
-  const columns = TASK_HEADERS.map(h => rows[0].findIndex(value => String(value).trim() === h));
-  const dataRows: ExcelJS.CellValue[][] = [];
-  const tasks = new Map<string, ExcelJS.CellValue>();
-  for (const row of rows.slice(1)) {
-    const values = columns.map(c => row[c] ?? '');
-    dataRows.push(values);
-    const key = addressKey(String(values[6]));
-    if (!key) continue;
-    if (tasks.has(key) && tasks.get(key) !== values[0]) throw new Error(`Multiple tasks found for ${values[6]}.`);
-    tasks.set(key, values[0]);
+  if (dataFile) {
+    const data = XLSX.read(await dataFile.arrayBuffer(), { type: 'array' });
+    const rows = data.SheetNames.map(name => XLSX.utils.sheet_to_json<string[]>(data.Sheets[name], { header: 1, defval: '' }))
+      .find(rows => TASK_HEADERS.every(h => rows[0]?.some(value => String(value).trim() === h)));
+    if (!rows) throw new Error('Data file must contain Print.Task, FRC, WAC, Terminal Type, Terminal Desc, Terminal Count, and Terminal Address headers.');
+    const columns = TASK_HEADERS.map(h => rows[0].findIndex(value => String(value).trim() === h));
+    const dataRows: ExcelJS.CellValue[][] = [];
+    for (const row of rows.slice(1)) {
+      const values = columns.map(c => row[c] ?? '');
+      dataRows.push(values);
+    }
+    const oldTask = workbook.getWorksheet('Task');
+    if (oldTask) workbook.removeWorksheet(oldTask.id);
+    const taskSheet = workbook.addWorksheet('Task');
+    taskSheet.addRow(TASK_HEADERS);
+    dataRows.forEach(row => taskSheet.addRow(row));
+    [14, 10, 10, 16, 24, 65, 38].forEach((width, i) => { taskSheet.getColumn(i + 1).width = width; });
+    taskSheet.views = [{ state: 'frozen', ySplit: 1 }];
+    taskSheet.autoFilter = `A1:G${dataRows.length + 1}`;
   }
-  const oldTask = workbook.getWorksheet('Task');
-  if (oldTask) workbook.removeWorksheet(oldTask.id);
-  const taskSheet = workbook.addWorksheet('Task');
-  taskSheet.addRow(TASK_HEADERS);
-  dataRows.forEach(row => taskSheet.addRow(row));
-  [14, 10, 10, 16, 24, 65, 38].forEach((width, i) => { taskSheet.getColumn(i + 1).width = width; });
-  taskSheet.views = [{ state: 'frozen', ySplit: 1 }];
-  taskSheet.autoFilter = `A1:G${dataRows.length + 1}`;
+  // Keep an existing Task sheet when no data is uploaded, or create a blank one
+  // so exported lookups can be used after task data is added in Excel.
+  const taskSheet = workbook.getWorksheet('Task') ?? workbook.addWorksheet('Task');
+  if (!taskSheet.getCell('A1').value) taskSheet.addRow(TASK_HEADERS);
+  const taskRows: { count: string; task: string }[] = [];
+  taskSheet.eachRow((row, r) => {
+    if (r > 1) taskRows.push({ count: row.getCell(6).text.toUpperCase(), task: row.getCell(1).text });
+  });
   if (orcaText.trim()) {
     const pasted = XLSX.read(orcaText.trim(), { type: 'string', raw: true, FS: orcaText.includes('\t') ? '\t' : ',' });
     const rows = XLSX.utils.sheet_to_json<string[]>(pasted.Sheets[pasted.SheetNames[0]], { header: 1, defval: '' });
@@ -134,9 +138,10 @@ export async function preparePonPower(ponFile: File, dataFile: File, orcaText = 
     const r = t.rowIndex + 1;
     sheet.getCell(r, 6).value = t.staggeredPort!;
     sheet.getCell(r, 7).value = t.staggeredStrand!;
-    const task = tasks.get(addressKey(t.terminalName));
+    const task = taskRows.find(row => row.count.includes(`${t.cableId.trim()},${t.powerTestStrand}-`.toUpperCase()))?.task;
     if (task != null) matchedTasks++;
-    sheet.getCell(r, 13).value = { formula: `IFERROR(INDEX('Task'!$A:$A,MATCH(TRIM(SUBSTITUTE(B${r}," CFST","")),'Task'!$G:$G,0)),"")`, result: task == null ? '' : String(task) };
+    const escapedCable = t.cableId.trim().replace(/[~*?]/g, '~$&').replace(/"/g, '""');
+    sheet.getCell(r, 13).value = { formula: `IFERROR(INDEX('Task'!$A:$A,MATCH("*${escapedCable},"&TRIM(LEFT(D${r},FIND("-",D${r})-1))&"-*",'Task'!$F:$F,0)),"")`, result: task ?? '' };
     sheet.getCell(r, 14).value = { formula: `IF(M${r}="","",IFERROR(INDEX('Orca'!$B:$B,MATCH(--M${r},'Orca'!$A:$A,0)),""))`, result: task == null ? '' : statuses.get(String(Number(task))) ?? '' };
     // Clear imported static status colors so blank statuses remain unfilled.
     for (let c = 1; c <= 14; c++) sheet.getCell(r, c).fill = { type: 'pattern', pattern: 'none' };

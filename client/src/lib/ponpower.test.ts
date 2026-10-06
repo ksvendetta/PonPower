@@ -3,11 +3,56 @@ import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
 import ExcelJS from 'exceljs';
 import { unzipSync, strFromU8 } from 'fflate';
-import { preparePonPower, staggeredFilename } from './ponpower';
+import { PON_HEADERS, preparePonPower, staggeredFilename } from './ponpower';
 
 async function file(path: string) {
   return new File([await readFile(path)], path.split('/').at(-1)!);
 }
+
+test('preview/export work without data, preserving embedded tasks when available', async () => {
+  for (const path of ['examples/PON_TEST_SHEET__17_.xlsx', 'examples/PON_TEST_SHEET__17__stag_Text.xlsx', 'PONSHEET.xlsx']) {
+    const result = await preparePonPower(await file(path));
+    assert.ok(result.terminals.length);
+    const saved = new ExcelJS.Workbook();
+    await saved.xlsx.load(await result.workbook.xlsx.writeBuffer());
+    const sheet = saved.getWorksheet(result.sheetName)!;
+    assert.ok(sheet.getCell('F6').value);
+    assert.ok(sheet.getCell('M6').formula.includes("'Task'!$F:$F"));
+    assert.ok(saved.getWorksheet('Task'));
+    if (path.includes('stag_Text')) assert.equal(result.matchedTasks, 188);
+    else {
+      assert.equal(result.matchedTasks, 0);
+      assert.equal(sheet.getCell('M6').text, '');
+      assert.equal(sheet.getCell('N6').text, '');
+    }
+  }
+});
+
+test('task lookup matches cable and starting count only, including split counts and first match', async () => {
+  const pon = new ExcelJS.Workbook();
+  const sheet = pon.addWorksheet('PON TEST SHEET');
+  sheet.getCell('D2').value = 'PROJECT: example';
+  sheet.getCell('H2').value = 'CABLE ID: PON4250WRR';
+  sheet.getRow(5).values = PON_HEADERS;
+  sheet.getRow(6).values = [1, 'unrelated address CFST', '123', '45-46', 2];
+  const data = new ExcelJS.Workbook();
+  const tasks = data.addWorksheet('Export');
+  tasks.addRow(['Print.Task', 'FRC', 'WAC', 'Terminal Type', 'Terminal Desc', 'Terminal Count', 'Terminal Address']);
+  tasks.addRow(['wrong cable', '', '', '', '', '["OTHER,45-45"]', 'unrelated address']);
+  tasks.addRow(['wrong count', '', '', '', '', '["PON4250WRR,145-145"]', 'unrelated address']);
+  tasks.addRow(['1.493', '', '', '', '', '["X,1-1","PON4250WRR,45-45","PON4250WRR,46-46","X,4-4"]', 'different address']);
+  tasks.addRow(['duplicate', '', '', '', '', '["PON4250WRR,45-46"]', 'different address']);
+  const result = await preparePonPower(
+    new File([await pon.xlsx.writeBuffer()], 'pon.xlsx'),
+    new File([await data.xlsx.writeBuffer()], 'data.xlsx'), 'Task\tStatus\n1.493\tC');
+  const saved = new ExcelJS.Workbook();
+  await saved.xlsx.load(await result.workbook.xlsx.writeBuffer());
+  assert.equal(result.matchedTasks, 1);
+  assert.equal(saved.getWorksheet(result.sheetName)!.getCell('M6').result, '1.493');
+  assert.equal(saved.getWorksheet(result.sheetName)!.getCell('N6').result, 'C');
+  assert.equal(saved.getWorksheet(result.sheetName)!.getCell('M6').formula,
+    `IFERROR(INDEX('Task'!$A:$A,MATCH("*PON4250WRR,"&TRIM(LEFT(D6,FIND("-",D6)-1))&"-*",'Task'!$F:$F,0)),"")`);
+});
 
 test('all 188 staggered ports and strands match the reference; task rows survive export', async () => {
   const pon = await file('examples/PON_TEST_SHEET__17__stag_Text.xlsx');

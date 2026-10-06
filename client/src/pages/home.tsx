@@ -176,7 +176,7 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
     setStaggeredTerminals([]);
     setConversionError("");
     setStrands([]); setJsonOutput(""); setCableId(""); setCfas("");
-    if (!file || !dataFile) { setIsProcessing(false); return; }
+    if (!file) { setIsProcessing(false); return; }
     setIsProcessing(true);
     preparePonPower(file, dataFile, orcaText).then(result => {
       if (cancelled) return;
@@ -605,7 +605,7 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
                   Upload Data
                 </CardTitle>
                 <CardDescription>
-                  Upload a Ponsheet and its task data export (.xlsx).
+                  Upload a Ponsheet (.xlsx). Optionally add a task data export.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -617,7 +617,7 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
                   onClear={() => setFile(null)}
                 />
                 <FileUpload
-                  label="Upload data file"
+                  label="Upload data file (optional)"
                   helper="Choose the task export, like data.xlsx"
                   accept=".xlsx"
                   onFileSelect={setDataFile}
@@ -633,7 +633,7 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
                 {conversionError && <p role="alert" className="text-sm text-destructive">{conversionError}</p>}
                 {parsedWorkbook && <p className="text-sm text-muted-foreground">
                   Matched {parsedWorkbook.matchedTasks} of {parsedWorkbook.terminals.length} terminals to tasks.
-                  {parsedWorkbook.matchedTasks < parsedWorkbook.terminals.length && " Unmatched tasks remain blank. Check that both files are for the same project."}
+                  {parsedWorkbook.matchedTasks < parsedWorkbook.terminals.length && (dataFile ? " Unmatched tasks remain blank. Check the cable ID and PON count in the task data." : " Add a data file to populate task lookups, or use tasks already in the Ponsheet.")}
                 </p>}
               </CardContent>
             </Card>
@@ -810,7 +810,7 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
             ) : (
               <div className="flex flex-col items-center justify-center text-muted-foreground py-16 opacity-50">
                 <FileSpreadsheet className="w-12 h-12 mb-2" />
-                <p>Upload both files to preview the staggered sheet</p>
+                <p>Upload a Ponsheet to preview the staggered sheet</p>
               </div>
             )}
           </CardContent>
