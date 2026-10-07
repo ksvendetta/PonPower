@@ -15,6 +15,8 @@ import {
 import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/hooks/use-toast';
 import { AppToggle } from '@/components/app-toggle';
+import { DistanceReview } from '@/components/distance-review';
+import { useDistanceReview } from '@/hooks/use-distance-review';
 import { Settings, Save, AlertTriangle, MapPin, ExternalLink, Search } from 'lucide-react';
 import {
   parseExfoXlsx, ExfoTerminal, ExfoXlsxParse, ExfoJobConfig, resolveJobConfig,
@@ -71,7 +73,8 @@ export default function Exfo({ publicMode = false }: ExfoProps = {}) {
   const [mapStatusKind, setMapStatusKind] = useState<'err' | 'ok' | ''>('');
   const [mapLoaded, setMapLoaded] = useState(false);
   const [pfpLocation, setPfpLocation] = useState<GeocodeHit | null>(null);
-  const [distances, setDistances] = useState<Map<number, number>>(new Map());
+  const [rawDistances, setDistances] = useState<Map<number, number>>(new Map());
+  const [mapPoints, setMapPoints] = useState<Map<number, GeocodeHit>>(new Map());
   const [showConnections, setShowConnections] = useState(false);
   const [ponSearch, setPonSearch] = useState('');
   const [iolmAutoApplied, setIolmAutoApplied] = useState(false);
@@ -84,6 +87,7 @@ export default function Exfo({ publicMode = false }: ExfoProps = {}) {
     gmap: any | null; gmarkers: any[]; connections: any[]; showConnections: boolean;
   }>({ gmap: null, gmarkers: [], connections: [], showConnections: false });
   const geocodeCacheRef = useRef<Map<string, GeocodeHit>>(new Map());
+  const mapRequestRef = useRef(0);
 
   // Load persisted state on mount
   useEffect(() => {
@@ -133,6 +137,7 @@ export default function Exfo({ publicMode = false }: ExfoProps = {}) {
   }, [cfg.aloc, cfg.zloc, cfg.wcc]);
 
   const handleFile = async (file: File) => {
+    mapRequestRef.current++;
     setFileName(file.name);
     try {
       const ab = await file.arrayBuffer();
@@ -142,6 +147,7 @@ export default function Exfo({ publicMode = false }: ExfoProps = {}) {
       setExcludedCands(new Set());
       setPfpLocation(null);
       setDistances(new Map());
+      setMapPoints(new Map());
       setMapLoaded(false);
       setIolmAutoApplied(false);
       toast({ title: 'Loaded', description: `${p.terminals.length} terminals from ${p.sheetName}.` });
@@ -231,6 +237,10 @@ export default function Exfo({ publicMode = false }: ExfoProps = {}) {
     () => parsed ? parsed.terminals.filter(t => !effectiveExcludedTerminals.has(t.row)) : [],
     [parsed, effectiveExcludedTerminals]
   );
+  const distanceReview = useDistanceReview(rawDistances, mapPoints, pfpLocation, keptTerminals.map(t => t.row));
+  const distances = distanceReview.distances;
+
+  useEffect(() => { setIolmAutoApplied(false); }, [distanceReview.decisions, rawDistances, effectiveExcludedTerminals]);
 
   const maxDistance = useMemo(() => {
     let m: number | null = null;
@@ -261,7 +271,7 @@ export default function Exfo({ publicMode = false }: ExfoProps = {}) {
     }
     setIolmAutoApplied(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [maxDistance]);
+  }, [maxDistance, iolmAutoApplied]);
 
   const showAlert = (title: string, body: React.ReactNode) => {
     setAlertContent({ title, body });
@@ -299,12 +309,14 @@ export default function Exfo({ publicMode = false }: ExfoProps = {}) {
   };
 
   const handleClear = () => {
+    mapRequestRef.current++;
     setParsed(null);
     setFileName('No file chosen.');
     setExcludedTerminals(new Set());
     setExcludedCands(new Set());
     setPfpLocation(null);
     setDistances(new Map());
+    setMapPoints(new Map());
     setMapLoaded(false);
     setIolmAutoApplied(false);
     setMapStatus('');
@@ -328,8 +340,9 @@ export default function Exfo({ publicMode = false }: ExfoProps = {}) {
   };
 
   const loadMapWith = async (p: ExfoXlsxParse, useCity: string) => {
+    const request = ++mapRequestRef.current;
     if (!apiKey.trim() || !mapCanvasRef.current) return;
-    const terms = p.terminals.filter(t => !effectiveExcludedTerminals.has(t.row));
+    const terms = p === parsed ? keptTerminals : p.terminals;
     if (!terms.length) return;
     try {
       const result = await renderEmbeddedMap(
@@ -341,15 +354,19 @@ export default function Exfo({ publicMode = false }: ExfoProps = {}) {
           pfpName: p.pfpName,
           terminals: terms,
           cache: geocodeCacheRef.current,
+          isCurrent: () => request === mapRequestRef.current,
           onStatus: (m, k) => { setMapStatus(m); setMapStatusKind(k || ''); },
         }
       );
+      if (request !== mapRequestRef.current) return;
       setPfpLocation(result.pfpLocation);
       setDistances(result.distances);
+      setMapPoints(result.locations);
       setMapLoaded(true);
       setMapStatus(`Mapped ${result.resolved} terminals in ${result.elapsedSec.toFixed(1)}s${result.failed ? ` — ${result.failed} failed` : ''}.`);
       setMapStatusKind(result.failed ? 'err' : 'ok');
     } catch (e: any) {
+      if (request !== mapRequestRef.current) return;
       setMapStatus(e?.message || String(e));
       setMapStatusKind('err');
     }
@@ -381,6 +398,8 @@ export default function Exfo({ publicMode = false }: ExfoProps = {}) {
       keptTerminals,
       geocodeCacheRef.current,
       showConnections,
+      undefined,
+      distances,
     );
     const w = window.open(url, '_blank');
     if (!w) {
@@ -856,6 +875,8 @@ export default function Exfo({ publicMode = false }: ExfoProps = {}) {
                   {mapStatus}
                 </p>
               )}
+              <DistanceReview outliers={distanceReview.outliers} decisions={distanceReview.decisions} raw={rawDistances}
+                terminals={keptTerminals} points={mapPoints} pfp={pfpLocation} onDecision={distanceReview.decide} />
               <div ref={mapCanvasRef} style={{ width: '100%', height: 460, borderRadius: 8, background: 'hsl(var(--secondary) / 0.4)', display: 'none' }} />
               <details open>
                 <summary className="text-sm cursor-pointer text-muted-foreground hover:text-foreground">

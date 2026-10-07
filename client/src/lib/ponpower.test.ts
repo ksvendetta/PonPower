@@ -3,7 +3,9 @@ import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
 import ExcelJS from 'exceljs';
 import { unzipSync, strFromU8 } from 'fflate';
-import { PON_HEADERS, preparePonPower, staggeredFilename } from './ponpower';
+import { PON_HEADERS, preparePonPower, staggeredFilename, findPonDuplicateGroups, applyPonDistances } from './ponpower';
+import { writeExcelWorkbook } from './xlsx-export';
+import { parseExfoXlsx } from './exfo';
 
 async function file(path: string) {
   return new File([await readFile(path)], path.split('/').at(-1)!);
@@ -147,8 +149,73 @@ test('export enables every column filter and dynamic O/C row fills for both Pons
       { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC6E0B4' }, bgColor: { argb: 'FFC6E0B4' } },
     ]);
     assert.equal(sheet.getCell('N7').text, '');
-    assert.deepEqual(sheet.getCell('A7').fill, { type: 'pattern', pattern: 'none' });
+    assert.deepEqual(sheet.getCell('A7').fill, { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F2F2' } });
   }
+});
+
+test('all cells export centered with consistent fonts, cleaned strings, gray stripes, and valid QR anchors', async () => {
+  const result = await preparePonPower(await file('examples/PON_TEST_SHEET__17_.xlsx'));
+  const sheet = result.workbook.getWorksheet(result.sheetName)!;
+  const originalImageCount = sheet.getImages().length;
+  sheet.getCell('B6').value = { richText: [{ text: '  Terminal\u00a0\u200b ', font: { name: 'Arial', size: 22 } }] };
+  sheet.getCell('B6').alignment = { horizontal: 'left', vertical: 'top', indent: 3, textRotation: 45 };
+  // Same anchor path used when the web app adds a QR on download.
+  const imageId = result.workbook.addImage({ base64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a0l8AAAAASUVORK5CYII=', extension: 'png' });
+  sheet.addImage(imageId, { tl: { col: 11.63, row: 1.05 }, ext: { width: 84, height: 84 } });
+  const bytes = await writeExcelWorkbook(result.workbook);
+  const zip = unzipSync(bytes);
+  const drawing = strFromU8(zip['xl/drawings/drawing1.xml']);
+  assert.match(drawing, /<xdr:oneCellAnchor>/);
+  assert.doesNotMatch(drawing, /<xdr:oneCellAnchor[^>]*editAs/);
+  assert.match(drawing, /cx="800100" cy="800100"/);
+  assert.ok(zip['xl/media/image1.png']);
+  const saved = new ExcelJS.Workbook();
+  await saved.xlsx.load(bytes);
+  assert.equal(saved.getWorksheet(result.sheetName)!.getImages().length, originalImageCount + 1);
+  assert.equal(saved.getWorksheet(result.sheetName)!.getCell('B6').text, 'Terminal');
+  for (const ws of saved.worksheets) ws.eachRow(row => row.eachCell({ includeEmpty: true }, cell => {
+    assert.equal(cell.alignment.horizontal, 'center');
+    assert.equal(cell.alignment.vertical, 'middle');
+    assert.equal(cell.alignment.indent, undefined);
+    assert.equal(cell.font.name, 'Calibri');
+    assert.equal(cell.font.size, 11);
+  }));
+});
+
+test('overlapping PON groups are cable-scoped and chosen terminals alone survive export', async () => {
+  const pon = new ExcelJS.Workbook();
+  const sheet = pon.addWorksheet('PON TEST SHEET');
+  sheet.getRow(5).values = PON_HEADERS;
+  sheet.getCell('H2').value = 'CABLE ID: PON4250WRR';
+  sheet.getRow(6).values = [1, 'first', '123', '45-46', 2];
+  sheet.getRow(7).values = [2, 'second', '456', '45-48', 4];
+  sheet.getRow(8).values = [3, 'third', '789', '49-50', 2];
+  const input = new File([await pon.xlsx.writeBuffer()], 'duplicates.xlsx');
+  const initial = await preparePonPower(input);
+  assert.equal(initial.duplicateGroups.length, 1);
+  assert.deepEqual(initial.duplicateGroups[0].counts, [45, 46]);
+  const chosen = await preparePonPower(input, null, '', new Map([[initial.duplicateGroups[0].key, 6]]));
+  assert.deepEqual(chosen.terminals.map(t => t.terminalName), ['second', 'third']);
+  assert.equal(chosen.workbook.getWorksheet(chosen.sheetName)!.getCell('B6').text, 'second');
+  assert.equal(chosen.workbook.getWorksheet(chosen.sheetName)!.getCell('B8').text, '');
+  assert.equal(chosen.terminals[1].staggeredPort, 2);
+  const parsed = parseExfoXlsx((await writeExcelWorkbook(chosen.workbook)).buffer as ArrayBuffer);
+  assert.equal(parsed.terminals.length, 2);
+  assert.equal(parsed.terminals[0].terminal, 'second');
+  assert.equal(findPonDuplicateGroups([{ ...initial.terminals[0], cableId: 'other' }, initial.terminals[1]]).length, 0);
+});
+
+test('rejected distances clear imported and previously exported footage; confirming restores it', async () => {
+  const result = await preparePonPower(await file('examples/PON_TEST_SHEET__17_.xlsx'));
+  const sheet = result.workbook.getWorksheet(result.sheetName)!;
+  sheet.getCell('H6').value = 500000;
+  applyPonDistances(result, new Map([[7, 1000]]), new Set([6]));
+  const saved = new ExcelJS.Workbook();
+  await saved.xlsx.load(await writeExcelWorkbook(result.workbook));
+  assert.equal(saved.getWorksheet(result.sheetName)!.getCell('H6').value, null);
+  assert.equal(saved.getWorksheet(result.sheetName)!.getCell('H7').value, 1000);
+  applyPonDistances(result, new Map([[6, 500000]]), new Set());
+  assert.equal(sheet.getCell('H6').value, 500000);
 });
 
 

@@ -103,6 +103,23 @@ export function parseExfoXlsx(arrayBuffer: ArrayBuffer): ExfoXlsxParse {
     return row ? (row[c - 1] ?? null) : null;
   };
 
+  // Exported compact PON sheets have one terminal per row and header metadata.
+  if (String(get(5, 2) ?? '').trim() === 'Terminal' && String(get(5, 4) ?? '').trim() === 'PON Count') {
+    const cable = String(get(2, 8) ?? '').replace(/^CABLE ID:\s*/i, '').trim();
+    const terminals: ExfoTerminal[] = [];
+    for (let r = 6; r <= aoa.length; r++) {
+      const terminal = String(get(r, 2) ?? '').trim();
+      if (!terminal) continue;
+      const strands = parseStrandList(get(r, 4));
+      terminals.push({ row: r, terminal, waldo: String(get(r, 3) ?? '').trim(), cable,
+        powerStrand: Number(get(r, 7)) > 0 ? Number(get(r, 7)) : strands[0] ?? null,
+        otdrRaw: String(get(r, 4) ?? ''), otdrStrands: strands, total: Number(get(r, 5)) || null });
+    }
+    return { sheetName, terminals, meta: { terminals: terminals.length },
+      project: String(get(2, 4) ?? '').replace(/^PROJECT:\s*/i, '').trim() || null,
+      pfpName: String(get(2, 1) ?? '').replace(/^PFP:\s*/i, '').trim() || null };
+  }
+
   let project: any = get(2, 24);
   if (project === null || project === '') {
     const row2 = aoa[1] || [];

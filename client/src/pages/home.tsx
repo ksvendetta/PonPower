@@ -23,7 +23,7 @@ import {
   Terminal,
 } from "@/lib/excel";
 import {
-  parseExfoXlsx, ExfoXlsxParse, parseAddress, formatDistance, resolveCityFromCLLI,
+  ExfoXlsxParse, parseAddress, formatDistance, resolveCityFromCLLI,
 } from "@/lib/exfo";
 import {
   GeocodeHit, loadGeocodeCache, renderEmbeddedMap, autoResolveCity,
@@ -32,6 +32,9 @@ import {
   startUserLocation, stopUserLocation, UserLocationState,
 } from "@/lib/exfo-maps";
 import QRCode from "qrcode";
+import { DistanceReview } from '@/components/distance-review';
+import { useDistanceReview } from '@/hooks/use-distance-review';
+import { normalizeWorkbookCells, writeExcelWorkbook } from '@/lib/xlsx-export';
 
 // QR version 40 at error-correction level M holds 2,331 alphanumeric / 1,852 byte chars.
 // URLs are encoded in byte mode, so cap below that with a small safety margin.
@@ -49,7 +52,7 @@ async function tryBuildQrDataUrl(url: string): Promise<string | null> {
 import { AppToggle } from "@/components/app-toggle";
 import { Download, FileJson, Copy, Save, FileSpreadsheet, Settings, MapPin, ExternalLink, Search, Share2, Locate } from "lucide-react";
 
-import { preparePonPower, staggeredFilename, PON_HEADERS, type PonPowerResult } from "@/lib/ponpower";
+import { preparePonPower, staggeredFilename, PON_HEADERS, applyPonDistances, type PonPowerResult } from "@/lib/ponpower";
 
 const API_KEY_STORAGE = "f2job.gmapsApiKey";
 const API_KEY_SEEDED = "f2job.gmapsApiKey.seeded";
@@ -75,6 +78,8 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [parsedWorkbook, setParsedWorkbook] = useState<PonPowerResult | null>(null);
   const [staggeredTerminals, setStaggeredTerminals] = useState<Terminal[]>([]);
+  const [duplicateChoices, setDuplicateChoices] = useState<Map<string, number>>(new Map());
+  const pendingDuplicates = parsedWorkbook?.duplicateGroups.some(g => !duplicateChoices.has(g.key)) ?? false;
 
   // ----- Map state (mirrors F2 Exfo) -----
   const [parsedExfo, setParsedExfo] = useState<ExfoXlsxParse | null>(null);
@@ -85,7 +90,10 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
   const [mapStatusKind, setMapStatusKind] = useState<"err" | "ok" | "">("");
   const [mapLoaded, setMapLoaded] = useState(false);
   const [pfpLocation, setPfpLocation] = useState<GeocodeHit | null>(null);
-  const [distances, setDistances] = useState<Map<number, number>>(new Map());
+  const [rawDistances, setDistances] = useState<Map<number, number>>(new Map());
+  const [mapPoints, setMapPoints] = useState<Map<number, GeocodeHit>>(new Map());
+  const distanceReview = useDistanceReview(rawDistances, mapPoints, pfpLocation, parsedExfo?.terminals.map(t => t.row) ?? []);
+  const distances = distanceReview.distances;
   const [showConnections, setShowConnections] = useState(false);
   const [ponSearch, setPonSearch] = useState("");
   const [shareUrl, setShareUrl] = useState<string | null>(null);
@@ -99,6 +107,7 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
   }>({ gmap: null, gmarkers: [], connections: [], showConnections: false });
   const userLocStateRef = useRef<UserLocationState>({});
   const geocodeCacheRef = useRef<Map<string, GeocodeHit>>(new Map());
+  const mapRequestRef = useRef(0);
 
   // Load API key + cache once
   useEffect(() => {
@@ -147,6 +156,7 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
 
   // Parse file when uploaded
   useEffect(() => {
+    setDuplicateChoices(new Map());
     if (file) {
       // Reset map state for new file
       setParsedExfo(null);
@@ -163,10 +173,6 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
       }
       if (mapCanvasRef.current) mapCanvasRef.current.style.display = "none";
 
-      // Also parse for PFP/terminal map data
-      file.arrayBuffer()
-        .then(ab => { try { setParsedExfo(parseExfoXlsx(ab)); } catch (_) {} })
-        .catch(() => {});
     }
   }, [file]);
 
@@ -175,21 +181,37 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
     setParsedWorkbook(null);
     setStaggeredTerminals([]);
     setConversionError("");
+    mapRequestRef.current++;
+    setParsedExfo(null);
+    setMapLoaded(false);
+    setDistances(new Map());
+    setMapPoints(new Map());
+    setShareUrl(null);
+    setShareQrDataUrl(null);
     setStrands([]); setJsonOutput(""); setCableId(""); setCfas("");
     if (!file) { setIsProcessing(false); return; }
     setIsProcessing(true);
-    preparePonPower(file, dataFile, orcaText).then(result => {
+    preparePonPower(file, dataFile, orcaText, duplicateChoices).then(result => {
       if (cancelled) return;
       setParsedWorkbook(result);
+      if (result.duplicateGroups.some(g => !duplicateChoices.has(g.key))) return;
       setStaggeredTerminals(result.terminals);
       setCableId(result.cableId);
       setCfas(result.project);
       setStrands(result.terminals.map(t => t.powerTestStrand));
+      const sheet = result.workbook.getWorksheet(result.sheetName)!;
+      setParsedExfo({ sheetName: result.sheetName, project: result.project, meta: {},
+        pfpName: sheet.getCell('A2').text.replace(/^PFP:\s*/i, '').trim() || null,
+        terminals: result.terminals.map(t => ({ row: t.rowIndex + 1, waldo: t.waldoId, terminal: t.terminalName, cable: t.cableId,
+          powerStrand: t.powerTestStrand, total: t.totalStrands, otdrRaw: t.otdrTestStrand,
+          otdrStrands: Array.from({ length: t.totalStrands }, (_, i) => t.powerTestStrand + i) })) });
     }).catch(err => {
       if (!cancelled) setConversionError(err instanceof Error ? err.message : "Could not read the uploaded files.");
     }).finally(() => { if (!cancelled) setIsProcessing(false); });
     return () => { cancelled = true; };
-  }, [file, dataFile, orcaText]);
+  }, [file, dataFile, orcaText, duplicateChoices]);
+
+  useEffect(() => { setShareUrl(null); setShareQrDataUrl(null); }, [distances]);
 
   // Generate JSON when dependencies change
   useEffect(() => {
@@ -250,6 +272,7 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
   };
 
   const handleLoadMap = async () => {
+    const request = ++mapRequestRef.current;
     if (!apiKey.trim()) {
       setMapStatus("Add a Google Maps API key in Settings.");
       setMapStatusKind("err");
@@ -286,15 +309,19 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
           terminals: parsedExfo.terminals,
           cache: geocodeCacheRef.current,
           portByRow: portByExfoRow,
+          isCurrent: () => request === mapRequestRef.current,
           onStatus: (m, k) => { setMapStatus(m); setMapStatusKind(k || ""); },
         }
       );
+      if (request !== mapRequestRef.current) return;
       setPfpLocation(result.pfpLocation);
       setDistances(result.distances);
+      setMapPoints(result.locations);
       setMapLoaded(true);
       setMapStatus(`Mapped ${result.resolved} terminals in ${result.elapsedSec.toFixed(1)}s${result.failed ? ` — ${result.failed} failed` : ""}.`);
       setMapStatusKind(result.failed ? "err" : "ok");
     } catch (e: any) {
+      if (request !== mapRequestRef.current) return;
       setMapStatus(e?.message || String(e));
       setMapStatusKind("err");
     }
@@ -322,6 +349,7 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
         geocodeCacheRef.current,
         showConnections,
         portByExfoRow,
+        distances,
       );
       const url = await buildMapViewerUrl(apiKey.trim(), data);
       setShareUrl(url);
@@ -356,6 +384,7 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
       geocodeCacheRef.current,
       showConnections,
       portByExfoRow,
+      distances,
     );
     const w = window.open(url, "_blank");
     if (!w) {
@@ -465,7 +494,7 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
   const footageByRowIndex = (() => {
     const m = new Map<number, number>();
     for (const t of staggeredTerminals) {
-      const original = parsedExfo?.terminals.find(item => item.waldo === t.waldoId && item.terminal === t.terminalName);
+      const original = parsedExfo?.terminals.find(item => item.row === t.rowIndex + 1);
       const distance = original ? distances.get(original.row) : undefined;
       if (distance != null) m.set(t.rowIndex, distance);
     }
@@ -477,7 +506,7 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
   const portByExfoRow = (() => {
     const m = new Map<number, number>();
     for (const t of staggeredTerminals) {
-      const original = parsedExfo?.terminals.find(item => item.waldo === t.waldoId && item.terminal === t.terminalName);
+      const original = parsedExfo?.terminals.find(item => item.row === t.rowIndex + 1);
       if (original && t.staggeredPort != null) m.set(original.row, t.staggeredPort);
     }
     return m;
@@ -496,6 +525,7 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
         geocodeCacheRef.current,
         showConnections,
         portByExfoRow,
+        distances,
       );
       const url = await buildMapViewerUrl(apiKey.trim(), data);
       setShareUrl(url);
@@ -509,25 +539,25 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
   };
 
   const handleDownloadConverted = async () => {
-    if (!parsedWorkbook || staggeredTerminals.length === 0) return;
+    if (!parsedWorkbook || staggeredTerminals.length === 0 || pendingDuplicates) return;
     try {
       const sheet = parsedWorkbook.workbook.getWorksheet(parsedWorkbook.sheetName)!;
-      for (const t of staggeredTerminals) {
-        const footage = footageByRowIndex.get(t.rowIndex);
-        if (footage != null) sheet.getCell(t.rowIndex + 1, 8).value = Math.round(footage);
-      }
+      applyPonDistances(parsedWorkbook, distances, distanceReview.suppressedRows);
       const qrShareUrl = await ensureShareUrl();
-      if (qrShareUrl && sheet.getImages().length === 0) {
+      if (qrShareUrl) {
         const qr = await tryBuildQrDataUrl(qrShareUrl);
         if (qr) {
-          const imageId = parsedWorkbook.workbook.addImage({ base64: qr, extension: 'png' });
+          const existingQr = sheet.getImages().find(image => image.range.tl.col >= 11 && image.range.tl.row < 3);
+          const imageId = existingQr ? Number(existingQr.imageId) : parsedWorkbook.workbook.addImage({ base64: qr, extension: 'png' });
+          if (existingQr) Object.assign(parsedWorkbook.workbook.getImage(imageId), { base64: qr, buffer: undefined, filename: undefined, extension: 'png' });
           if (!sheet.getCell('L1').isMerged) sheet.mergeCells('L1:M1');
           sheet.getCell('L1').value = 'Scan QR for Map';
           sheet.getRow(2).height = 64;
-          sheet.addImage(imageId, { tl: { col: 11.63, row: 1.05 }, ext: { width: 84, height: 84 } });
+          if (!existingQr) sheet.addImage(imageId, { tl: { col: 11.63, row: 1.05 }, ext: { width: 84, height: 84 } });
         }
       }
-      const bytes = await parsedWorkbook.workbook.xlsx.writeBuffer();
+      normalizeWorkbookCells(parsedWorkbook.workbook);
+      const bytes = await writeExcelWorkbook(parsedWorkbook.workbook);
       const blob = new Blob([bytes], {
         type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       });
@@ -635,6 +665,18 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
                   Matched {parsedWorkbook.matchedTasks} of {parsedWorkbook.terminals.length} terminals to tasks.
                   {parsedWorkbook.matchedTasks < parsedWorkbook.terminals.length && (dataFile ? " Unmatched tasks remain blank. Check the cable ID and PON count in the task data." : " Add a data file to populate task lookups, or use tasks already in the Ponsheet.")}
                 </p>}
+                {!!parsedWorkbook?.duplicateGroups.length && <div className="space-y-3 rounded border border-amber-500/50 p-3">
+                  <p className="text-sm font-semibold">Duplicate PON counts — choose which terminal to keep</p>
+                  <p className="text-xs text-muted-foreground">Other terminals in each overlapping group are excluded from the preview, spreadsheet, report, and map.</p>
+                  {parsedWorkbook.duplicateGroups.map(group => <div key={group.key} className="space-y-2 border-t pt-2">
+                    <p className="text-xs">{group.cableId} · duplicate PON {group.counts.join(', ')}</p>
+                    {group.items.map(t => <label key={t.rowIndex} className="flex gap-2 items-center text-xs cursor-pointer">
+                      <input type="radio" name={`pon-duplicate-${group.key}`} checked={duplicateChoices.get(group.key) === t.rowIndex}
+                        onChange={() => setDuplicateChoices(current => new Map(current).set(group.key, t.rowIndex))} />
+                      {t.terminalName} · Waldo {t.waldoId} · PON {t.powerTestStrand}-{t.powerTestStrand + t.totalStrands - 1} · row {t.rowIndex + 1}
+                    </label>)}
+                  </div>)}
+                </div>}
               </CardContent>
             </Card>
 
@@ -795,11 +837,11 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {staggeredTerminals.map((t) => (
-                      <TableRow key={t.rowIndex}>
+                    {staggeredTerminals.map((t, rowNumber) => (
+                      <TableRow key={t.rowIndex} className={rowNumber % 2 === 1 ? 'bg-muted/30' : ''}>
                         {PON_HEADERS.map((header, i) => (
                           <TableCell key={header} className="whitespace-nowrap">
-                            {i === 7 && footageByRowIndex.has(t.rowIndex) ? Math.round(footageByRowIndex.get(t.rowIndex)!).toLocaleString() : parsedWorkbook?.workbook.getWorksheet(parsedWorkbook.sheetName)?.getCell(t.rowIndex + 1, i + 1).text}
+                            {i === 7 && distanceReview.suppressedRows.has(t.rowIndex + 1) ? '' : i === 7 && footageByRowIndex.has(t.rowIndex) ? Math.round(footageByRowIndex.get(t.rowIndex)!).toLocaleString() : parsedWorkbook?.workbook.getWorksheet(parsedWorkbook.sheetName)?.getCell(t.rowIndex + 1, i + 1).text}
                           </TableCell>
                         ))}
                       </TableRow>
@@ -810,7 +852,7 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
             ) : (
               <div className="flex flex-col items-center justify-center text-muted-foreground py-16 opacity-50">
                 <FileSpreadsheet className="w-12 h-12 mb-2" />
-                <p>Upload a Ponsheet to preview the staggered sheet</p>
+                <p>{pendingDuplicates ? 'Choose which duplicate PON terminals to keep before previewing' : 'Upload a Ponsheet to preview the staggered sheet'}</p>
               </div>
             )}
           </CardContent>
@@ -879,6 +921,8 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
                   {mapStatus}
                 </p>
               )}
+              <DistanceReview outliers={distanceReview.outliers} decisions={distanceReview.decisions} raw={rawDistances}
+                terminals={parsedExfo.terminals} points={mapPoints} pfp={pfpLocation} onDecision={distanceReview.decide} />
               <div ref={mapCanvasRef} style={{ width: "100%", height: 460, borderRadius: 8, background: "hsl(var(--secondary) / 0.4)", display: "none" }} />
               <details>
                 <summary className="text-sm cursor-pointer text-muted-foreground hover:text-foreground">

@@ -1,5 +1,6 @@
-import { compressToEncodedURIComponent } from 'lz-string';
+import LZString from 'lz-string';
 import { manhattanFeet, parseAddress, terminalStrandNumbers, terminalStrandRange, ExfoTerminal, resolveCityFromCLLI } from './exfo';
+const { compressToEncodedURIComponent } = LZString;
 
 declare global {
   interface Window {
@@ -198,6 +199,7 @@ export interface RenderMapOptions {
   terminals: ExfoTerminal[];
   cache: Map<string, GeocodeHit>;
   portByRow?: Map<number, number>;
+  isCurrent?: () => boolean;
   onStatus?: (msg: string, kind?: 'err' | 'ok' | '') => void;
 }
 
@@ -207,6 +209,7 @@ export interface RenderMapResult {
   resolved: number;
   failed: number;
   elapsedSec: number;
+  locations: Map<number, GeocodeHit>;
 }
 
 export async function renderEmbeddedMap(
@@ -219,6 +222,7 @@ export async function renderEmbeddedMap(
 
   onStatus?.('Loading Google Maps…');
   await loadGoogleMapsScript(apiKey);
+  if (opts.isCurrent && !opts.isCurrent()) throw new Error('Map load superseded.');
 
   if (!state.gmap) {
     state.gmap = new window.google.maps.Map(canvas, { zoom: 12, center: { lat: 44.2619, lng: -88.4154 } });
@@ -250,12 +254,12 @@ export async function renderEmbeddedMap(
   const locations = await pool(targets, (tgt) => geocodeOne(geocoder, tgt.q, cache), 10, (done, total) => {
     if (done % 5 === 0 || done === total) onStatus?.(`Geocoded ${done} / ${total}…`);
   });
+  if (opts.isCurrent && !opts.isCurrent()) throw new Error('Map load superseded.');
   saveGeocodeCache(cache);
 
-  onStatus?.('Checking for geocode outliers…');
-  const fixed = await reconcileOutlierLocations(geocoder, targets as any, locations, cache);
-  if (fixed) onStatus?.(`Nudged ${fixed} outlier pin${fixed === 1 ? '' : 's'} back to the cluster.`);
-  saveGeocodeCache(cache);
+  // Preserve the returned pins for explicit user review rather than silently
+  // replacing isolated geocodes with a different Google result.
+  const terminalLocations = new Map<number, GeocodeHit>();
 
   let pfpLocation: GeocodeHit | null = null;
   let resolved = 0, failed = 0;
@@ -283,6 +287,7 @@ export async function renderEmbeddedMap(
       });
       state.gmarkers.push(marker);
     } else if (tgt.t) {
+      terminalLocations.set(tgt.t.row, place);
       const pos = new window.google.maps.LatLng(place.lat, place.lng);
       bounds.extend(pos);
       if (pfpLocation) {
@@ -318,7 +323,7 @@ export async function renderEmbeddedMap(
 
   if (state.gmarkers.length) state.gmap.fitBounds(bounds, 40);
   const elapsedSec = (performance.now() - t0) / 1000;
-  return { pfpLocation, distances, resolved, failed, elapsedSec };
+  return { pfpLocation, distances, resolved, failed, elapsedSec, locations: terminalLocations };
 }
 
 // Live user-location overlay. Stays in its own state object so it survives map
@@ -725,7 +730,7 @@ export function buildOpenInNewTabHtml(
     const addr = parseAddress(t.terminal);
     const loc = cache.get(buildQuery(addr));
     if (!loc) return null;
-    const distFt = pfpLocation ? manhattanFeet(pfpLocation, loc) : null;
+    const distFt = distances.get(t.row) ?? null;
     const nums = terminalStrandNumbers(t);
     return {
       name: t.terminal, addr, waldo: t.waldo || '',
@@ -833,13 +838,14 @@ export function buildShareData(
   cache: Map<string, GeocodeHit>,
   showConnections: boolean,
   portByRow?: Map<number, number>,
+  distances?: Map<number, number>,
 ): { title: string; pfp: any; terms: ShareTerm[]; connect: boolean } {
   const buildQuery = (addr: string) => city ? `${addr}, ${city}` : addr;
   const terms = terminals.map(t => {
     const addr = parseAddress(t.terminal);
     const loc = cache.get(buildQuery(addr));
     if (!loc) return null;
-    const distFt = pfpLocation ? manhattanFeet(pfpLocation, loc) : null;
+    const distFt = distances ? distances.get(t.row) ?? null : pfpLocation ? manhattanFeet(pfpLocation, loc) : null;
     const nums = terminalStrandNumbers(t);
     return {
       name: t.terminal, addr, waldo: t.waldo || '',
@@ -882,8 +888,9 @@ export function buildOpenInNewTabUrl(
   cache: Map<string, GeocodeHit>,
   showConnections: boolean,
   portByRow?: Map<number, number>,
+  distances?: Map<number, number>,
 ): string {
-  const data = buildShareData(title, pfpName, pfpLocation, city, terminals, cache, showConnections, portByRow);
+  const data = buildShareData(title, pfpName, pfpLocation, city, terminals, cache, showConnections, portByRow, distances);
   return longFormUrl(apiKey, data);
 }
 

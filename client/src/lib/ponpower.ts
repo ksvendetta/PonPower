@@ -1,6 +1,7 @@
 import ExcelJS from 'exceljs';
 import * as XLSX from 'xlsx';
 import { parseTerminals, type Terminal } from './excel';
+import { cleanCellText, normalizeWorkbookCells } from './xlsx-export';
 
 export const PON_HEADERS = ['#', 'Terminal', 'Waldo ID', 'PON Count', 'Total Strands', 'Test Port', 'Test Strand', 'Estm FT', 'Real FT', 'Failed Strand', 'Lost', '@FT', 'Task', 'Status'];
 const TASK_HEADERS = ['Print.Task', 'FRC', 'WAC', 'Terminal Type', 'Terminal Desc', 'Terminal Count', 'Terminal Address'];
@@ -12,6 +13,27 @@ export interface PonPowerResult {
   matchedTasks: number;
   project: string;
   cableId: string;
+  duplicateGroups: PonDuplicateGroup[];
+}
+
+export interface PonDuplicateGroup { key: string; cableId: string; counts: number[]; items: Terminal[] }
+
+/** Merge overlapping PON ranges into one choice per connected group, scoped to cable. */
+export function findPonDuplicateGroups(terminals: Terminal[]): PonDuplicateGroup[] {
+  const groups: Terminal[][] = [];
+  for (const terminal of terminals) {
+    const overlaps = groups.filter(group => group.some(t => t.cableId.trim().toUpperCase() === terminal.cableId.trim().toUpperCase() &&
+      t.powerTestStrand <= terminal.powerTestStrand + terminal.totalStrands - 1 && terminal.powerTestStrand <= t.powerTestStrand + t.totalStrands - 1));
+    const merged = [terminal, ...overlaps.flat()];
+    for (const group of overlaps) groups.splice(groups.indexOf(group), 1);
+    groups.push(merged);
+  }
+  return groups.filter(g => g.length > 1).map(items => {
+    items.sort((a, b) => a.rowIndex - b.rowIndex);
+    const counts = new Map<number, number>();
+    for (const t of items) for (let n = t.powerTestStrand; n < t.powerTestStrand + t.totalStrands; n++) counts.set(n, (counts.get(n) ?? 0) + 1);
+    return { key: items.map(t => t.rowIndex).join(','), cableId: items[0].cableId, counts: Array.from(counts).filter(([, n]) => n > 1).map(([n]) => n).sort((a, b) => a - b), items };
+  });
 }
 
 /** Advance through ports 1–4, skipping ports unavailable on this terminal. */
@@ -25,11 +47,12 @@ export function staggerPonTerminals(terminals: Terminal[]): Terminal[] {
   });
 }
 
-export async function preparePonPower(ponFile: File, dataFile: File | null = null, orcaText = ''): Promise<PonPowerResult> {
+export async function preparePonPower(ponFile: File, dataFile: File | null = null, orcaText = '', duplicateChoices: Map<string, number> = new Map()): Promise<PonPowerResult> {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(await ponFile.arrayBuffer());
   const source = workbook.worksheets.find(s => s.getCell('B5').text === 'Terminal') ?? workbook.worksheets[0];
   if (!source) throw new Error('The Ponsheet workbook has no worksheets.');
+  normalizeWorkbookCells(workbook);
   const compact = PON_HEADERS.slice(0, 7).every((h, i) => source.getCell(5, i + 1).text === h);
   let terminals: Terminal[];
   let project: string;
@@ -86,6 +109,31 @@ export async function preparePonPower(ponFile: File, dataFile: File | null = nul
     sheet.pageSetup = { orientation: 'landscape', paperSize: 9, fitToPage: true, fitToWidth: 1, fitToHeight: 0, printTitlesRow: '1:5', printArea: `A1:N${terminals.length + 5}` };
   }
   if (!terminals.length) throw new Error('No terminals found in the Ponsheet.');
+  terminals = terminals.map(t => ({ ...t, terminalName: cleanCellText(t.terminalName), waldoId: cleanCellText(t.waldoId), cableId: cleanCellText(t.cableId) }));
+  const duplicateGroups = findPonDuplicateGroups(terminals);
+  const excludedRows = new Set<number>();
+  for (const group of duplicateGroups) {
+    const kept = duplicateChoices.get(group.key);
+    if (kept != null && group.items.some(t => t.rowIndex === kept)) {
+      group.items.forEach(t => { if (t.rowIndex !== kept) excludedRows.add(t.rowIndex); });
+    }
+  }
+  if (excludedRows.size) {
+    const oldLast = sheet.rowCount;
+    const kept = terminals.filter(t => !excludedRows.has(t.rowIndex));
+    const values = kept.map(t => sheet.getRow(t.rowIndex + 1).values);
+    for (let r = 6; r <= oldLast; r++) sheet.getRow(r).values = [];
+    terminals = kept.map((t, i) => {
+      const r = i + 6;
+      sheet.getRow(r).values = values[i];
+      sheet.getCell(r, 1).value = i + 1;
+      return { ...t, rowIndex: r - 1 };
+    });
+    sheet.spliceRows(terminals.length + 6, oldLast - terminals.length - 5);
+    sheet.getCell('A3').value = `TOTAL STRANDS: ${terminals.reduce((n, t) => n + t.totalStrands, 0)}`;
+    sheet.getCell('G3').value = `TERMINALS: ${terminals.length}`;
+    sheet.pageSetup.printArea = `A1:N${terminals.length + 5}`;
+  }
 
   if (dataFile) {
     const data = XLSX.read(await dataFile.arrayBuffer(), { type: 'array' });
@@ -143,8 +191,10 @@ export async function preparePonPower(ponFile: File, dataFile: File | null = nul
     const escapedCable = t.cableId.trim().replace(/[~*?]/g, '~$&').replace(/"/g, '""');
     sheet.getCell(r, 13).value = { formula: `IFERROR(INDEX('Task'!$A:$A,MATCH("*${escapedCable},"&TRIM(LEFT(D${r},FIND("-",D${r})-1))&"-*",'Task'!$F:$F,0)),"")`, result: task ?? '' };
     sheet.getCell(r, 14).value = { formula: `IF(M${r}="","",IFERROR(INDEX('Orca'!$B:$B,MATCH(--M${r},'Orca'!$A:$A,0)),""))`, result: task == null ? '' : statuses.get(String(Number(task))) ?? '' };
-    // Clear imported static status colors so blank statuses remain unfilled.
-    for (let c = 1; c <= 14; c++) sheet.getCell(r, c).fill = { type: 'pattern', pattern: 'none' };
+    // Status conditional fills override this light-gray alternating background.
+    for (let c = 1; c <= 14; c++) sheet.getCell(r, c).fill = (terminals.indexOf(t) % 2 === 1)
+      ? { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F2F2' } }
+      : { type: 'pattern', pattern: 'none' };
   }
   const lastRow = Math.max(...terminals.map(t => t.rowIndex + 1));
   sheet.autoFilter = `A5:N${lastRow}`;
@@ -164,9 +214,20 @@ export async function preparePonPower(ponFile: File, dataFile: File | null = nul
     ],
   });
   workbook.calcProperties.fullCalcOnLoad = true;
-  return { workbook, sheetName: sheet.name, terminals, matchedTasks, project, cableId };
+  normalizeWorkbookCells(workbook);
+  return { workbook, sheetName: sheet.name, terminals, matchedTasks, project, cableId, duplicateGroups };
 }
 
 export function staggeredFilename(name: string): string {
   return `${name.replace(/\.xlsx$/i, '').replace(/_staggered$/i, '')}_staggered.xlsx`;
+}
+
+/** Apply only reviewed Google distances; clear stale imported or previously exported outliers. */
+export function applyPonDistances(result: PonPowerResult, distances: Map<number, number>, suppressedRows: Set<number>) {
+  const sheet = result.workbook.getWorksheet(result.sheetName)!;
+  for (const terminal of result.terminals) {
+    const row = terminal.rowIndex + 1;
+    if (suppressedRows.has(row)) sheet.getCell(row, 8).value = null;
+    else if (distances.has(row)) sheet.getCell(row, 8).value = Math.round(distances.get(row)!);
+  }
 }

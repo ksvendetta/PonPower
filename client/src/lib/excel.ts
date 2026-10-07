@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx';
 import ExcelJS from 'exceljs';
 import QRCode from 'qrcode';
+import { writeExcelWorkbook } from './xlsx-export';
 
 export interface Terminal {
   rowIndex: number; // 0-based
@@ -754,6 +755,5 @@ export async function generateConvertedXlsx(
     evenFooter: '&CPage &P of &N',
   };
 
-  const buf = await wb.xlsx.writeBuffer();
-  return new Uint8Array(buf);
+  return writeExcelWorkbook(wb);
 }
