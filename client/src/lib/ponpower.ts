@@ -272,8 +272,9 @@ export async function preparePonPower(ponFile: File, dataFile: File | null = nul
   return { workbook, sheetName: sheet.name, terminals, matchedTasks, project, cableId, duplicateGroups };
 }
 
-export function staggeredFilename(name: string): string {
-  return `${name.replace(/\.xlsx$/i, '').replace(/_staggered$/i, '')}_staggered.xlsx`;
+export function ponSheetFilename(project: string): string {
+  const number = cleanCellText(project).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/[. ]+$/, '');
+  return number ? `${number}_PonSheet.xlsx` : 'PonSheet.xlsx';
 }
 
 /** Apply only reviewed Google distances; clear stale imported or previously exported outliers. */

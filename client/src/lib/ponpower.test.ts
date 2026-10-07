@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
 import ExcelJS from 'exceljs';
 import { unzipSync, strFromU8 } from 'fflate';
-import { LEGACY_PON_HEADERS as PON_HEADERS, preparePonPower, staggeredFilename, findPonDuplicateGroups, applyPonDistances } from './ponpower';
+import { LEGACY_PON_HEADERS as PON_HEADERS, preparePonPower, ponSheetFilename, findPonDuplicateGroups, applyPonDistances } from './ponpower';
 import { writeExcelWorkbook } from './xlsx-export';
 import { parseExfoXlsx } from './exfo';
 
@@ -102,9 +102,10 @@ test('pasted Orca rows populate status lookups and reject malformed input', asyn
   await assert.rejects(preparePonPower(pon, await file('PONSHEET.xlsx')), /Data file must contain/);
 });
 
-test('download name gets one staggered suffix', () => {
-  assert.equal(staggeredFilename('PON_TEST_SHEET__17_.xlsx'), 'PON_TEST_SHEET__17__staggered.xlsx');
-  assert.equal(staggeredFilename('PON_TEST_SHEET__17__staggered.xlsx'), 'PON_TEST_SHEET__17__staggered.xlsx');
+test('download name uses the project number followed by PonSheet', () => {
+  assert.equal(ponSheetFilename('A051JAX'), 'A051JAX_PonSheet.xlsx');
+  assert.equal(ponSheetFilename('  A051JAX  '), 'A051JAX_PonSheet.xlsx');
+  assert.equal(ponSheetFilename(''), 'PonSheet.xlsx');
 });
 
 test('reconstructed source and data reproduce every reference terminal', async () => {

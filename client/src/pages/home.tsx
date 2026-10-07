@@ -52,7 +52,7 @@ async function tryBuildQrDataUrl(url: string): Promise<string | null> {
 import { AppToggle } from "@/components/app-toggle";
 import { Download, FileJson, Copy, Save, FileSpreadsheet, Settings, MapPin, ExternalLink, Search, Share2, Locate } from "lucide-react";
 
-import { preparePonPower, staggeredFilename, PON_HEADERS, applyPonDistances, type PonPowerResult } from "@/lib/ponpower";
+import { preparePonPower, ponSheetFilename, PON_HEADERS, applyPonDistances, type PonPowerResult } from "@/lib/ponpower";
 
 const API_KEY_STORAGE = "f2job.gmapsApiKey";
 const API_KEY_SEEDED = "f2job.gmapsApiKey.seeded";
@@ -563,7 +563,7 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
       const a = document.createElement("a");
 
       a.href = url;
-      a.download = staggeredFilename(file?.name ?? "PONSHEET.xlsx");
+      a.download = ponSheetFilename(parsedWorkbook.project);
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
