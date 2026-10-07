@@ -656,7 +656,7 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
                   <Textarea id="orca-paste" value={orcaText} onChange={e => setOrcaText(e.target.value)}
                     placeholder={"Task\tStatus\n1.478\tC\n1.479\tO"}
                     className="font-mono text-xs min-h-28" />
-                  <p className="text-xs text-muted-foreground">Copy and paste Orca rows with Task first and Status second. Headers are optional.</p>
+                  <p className="text-xs text-muted-foreground">Paste Orca rows with Task first and Status second. The exported Orca tab places Task in B and Status in C. Headers are optional.</p>
                 </div>
                 {conversionError && <p role="alert" className="text-sm text-destructive">{conversionError}</p>}
                 {parsedWorkbook && <p className="text-sm text-muted-foreground">

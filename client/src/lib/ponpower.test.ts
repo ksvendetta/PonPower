@@ -251,3 +251,39 @@ test('PON resolves duplicate Waldo IDs before Fiber ID conflicts, as F2 does', a
   const selected = await preparePonPower(input, null, '', new Map([['waldo:same', 6]]));
   assert.deepEqual(selected.terminals.map(t => t.terminalName), ['B']);
 });
+
+
+test('Orca exports the reference B/C layout and Status formulas survive old and new workbook imports', async () => {
+  const input = await file('examples/PON_TEST_SHEET__17__stag_Text.xlsx');
+  const result = await preparePonPower(input, null, 'Task\tStatus\tOpen Flag\tCol D\tTerminal Desc\tWAC\tFRC\tCol H\n1.499\tO\tYes\tD\tTerminal description\tTESTP\t845C\tH');
+  const orca = result.workbook.getWorksheet('Orca')!;
+  assert.equal(orca.getCell('A1').text, '');
+  assert.equal(orca.getCell('A2').text, 'Paste Here');
+  assert.deepEqual(Array.from({ length: 8 }, (_, i) => orca.getCell(1, i + 2).text), ['Task', 'Status', 'Open Flag', 'Col D', 'Terminal Desc', 'WAC', 'FRC', 'Col H']);
+  assert.equal(orca.getCell('B2').value, 1.499);
+  assert.equal(orca.getCell('C2').text, 'O');
+  assert.equal(orca.getCell('I2').text, 'H');
+  assert.deepEqual(orca.model.merges, []);
+  const status = result.workbook.getWorksheet(result.sheetName)!.getCell('N17');
+  assert.equal(status.formula, `IF(M17="","",IFERROR(INDEX('Orca'!$C:$C,MATCH(--M17,'Orca'!$B:$B,0)),""))`);
+  assert.equal(status.result, 'O');
+  orca.getRow(2).height = 60;
+  orca.getColumn(6).width = 100;
+  const bytes = await writeExcelWorkbook(result.workbook);
+  const saved = new ExcelJS.Workbook();
+  await saved.xlsx.load(bytes);
+  assert.equal(saved.getWorksheet('Orca')!.getRow(2).height, 15);
+  assert.ok(saved.getWorksheet('Orca')!.getColumn(6).width! < 30);
+  assert.notEqual(saved.getWorksheet('Orca')!.getCell('F2').alignment.wrapText, true);
+  assert.equal(saved.getWorksheet('Orca')!.getCell('F2').alignment.shrinkToFit, true);
+  assert.equal(saved.getWorksheet('PON TEST SHEET')!.getRow(6).height, 15);
+  const reimported = await preparePonPower(new File([bytes], 'new-layout.xlsx'));
+  assert.equal(reimported.workbook.getWorksheet('Orca')!.getCell('B2').value, 1.499);
+  assert.equal(reimported.workbook.getWorksheet(reimported.sheetName)!.getCell('N17').result, 'O');
+  const migrated = await preparePonPower(input);
+  assert.equal(migrated.workbook.getWorksheet('Orca')!.getCell('B1').text, 'Task');
+  assert.equal(migrated.workbook.getWorksheet('Orca')!.rowCount, 189);
+  const blank = await preparePonPower(await file('PONSHEET.xlsx'));
+  assert.equal(blank.workbook.getWorksheet('Orca')!.getCell('A2').text, 'Paste Here');
+  assert.equal(blank.workbook.getWorksheet('Orca')!.getCell('C1').text, 'Status');
+});

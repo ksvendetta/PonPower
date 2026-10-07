@@ -177,6 +177,9 @@ export async function preparePonPower(ponFile: File, dataFile: File | null = nul
   taskSheet.eachRow((row, r) => {
     if (r > 1) taskRows.push({ count: row.getCell(6).text.toUpperCase(), task: row.getCell(1).text });
   });
+  const orcaHeaders = ['Task', 'Status', 'Open Flag', 'Col D', 'Terminal Desc', 'WAC', 'FRC', 'Col H'];
+  const existingOrca = workbook.getWorksheet('Orca');
+  let orcaRows: ExcelJS.CellValue[][] = [];
   if (orcaText.trim()) {
     const pasted = XLSX.read(orcaText.trim(), { type: 'string', raw: true, FS: orcaText.includes('\t') ? '\t' : ',' });
     const rows = XLSX.utils.sheet_to_json<string[]>(pasted.Sheets[pasted.SheetNames[0]], { header: 1, defval: '' });
@@ -184,16 +187,28 @@ export async function preparePonPower(ponFile: File, dataFile: File | null = nul
     const values = hasHeader ? rows.slice(1) : rows;
     const invalid = values.find(row => row.some(v => String(v).trim()) && (!Number.isFinite(Number(row[0])) || !String(row[0]).trim()));
     if (invalid || !values.length) throw new Error('Paste Orca rows with Task in the first column and Status in the second column.');
-    const existing = workbook.getWorksheet('Orca');
-    if (existing) workbook.removeWorksheet(existing.id);
-    const pastedOrca = workbook.addWorksheet('Orca');
-    pastedOrca.addRow(hasHeader ? rows[0] : ['Task', 'Status', 'Open Flag', 'Col D', 'Terminal Desc', 'WAC', 'FRC', 'Col H']);
-    values.filter(row => String(row[0]).trim()).forEach(row => pastedOrca.addRow([Number(row[0]), ...row.slice(1)]));
+    orcaRows = values.filter(row => String(row[0]).trim()).map(row => [Number(row[0]), ...row.slice(1, 8)]);
+  } else if (existingOrca) {
+    // Migrate old A/B workbooks and preserve already shifted B/C workbooks.
+    const taskColumn = existingOrca.getCell('B1').text.trim().toLowerCase() === 'task' ? 2 : 1;
+    existingOrca.eachRow((row, r) => {
+      if (r <= 1 || !row.getCell(taskColumn).text.trim()) return;
+      const values = orcaHeaders.map((_, i) => row.getCell(taskColumn + i).value);
+      const task = row.getCell(taskColumn).text.trim();
+      if (Number.isFinite(Number(task))) values[0] = Number(task);
+      orcaRows.push(values);
+    });
   }
-  const orca = workbook.getWorksheet('Orca') ?? workbook.addWorksheet('Orca');
-  if (!orca.getCell('A1').value) orca.addRow(['Task', 'Status', 'Open Flag', 'Col D', 'Terminal Desc', 'WAC', 'FRC', 'Col H']);
+  if (existingOrca) workbook.removeWorksheet(existingOrca.id);
+  const orca = workbook.addWorksheet('Orca');
+  orca.addRow(['', ...orcaHeaders]);
+  orcaRows.forEach(row => orca.addRow(['', ...row]));
+  orca.getCell('A2').value = 'Paste Here';
   const statuses = new Map<string, string>();
-  orca.eachRow((row, r) => { if (r > 1) statuses.set(String(Number(row.getCell(1).text)), row.getCell(2).text); });
+  orca.eachRow((row, r) => {
+    const task = row.getCell(2).text.trim();
+    if (r > 1 && task && !statuses.has(String(Number(task)))) statuses.set(String(Number(task)), row.getCell(3).text);
+  });
   terminals = staggerPonTerminals(terminals);
   let matchedTasks = 0;
   for (const t of terminals) {
@@ -204,7 +219,7 @@ export async function preparePonPower(ponFile: File, dataFile: File | null = nul
     if (task != null) matchedTasks++;
     const escapedCable = t.cableId.trim().replace(/[~*?]/g, '~$&').replace(/"/g, '""');
     sheet.getCell(r, 13).value = { formula: `IFERROR(INDEX('Task'!$A:$A,MATCH("*${escapedCable},"&TRIM(LEFT(D${r},FIND("-",D${r})-1))&"-*",'Task'!$F:$F,0)),"")`, result: task ?? '' };
-    sheet.getCell(r, 14).value = { formula: `IF(M${r}="","",IFERROR(INDEX('Orca'!$B:$B,MATCH(--M${r},'Orca'!$A:$A,0)),""))`, result: task == null ? '' : statuses.get(String(Number(task))) ?? '' };
+    sheet.getCell(r, 14).value = { formula: `IF(M${r}="","",IFERROR(INDEX('Orca'!$C:$C,MATCH(--M${r},'Orca'!$B:$B,0)),""))`, result: task == null ? '' : statuses.get(String(Number(task))) ?? '' };
     // Status conditional fills override this light-gray alternating background.
     for (let c = 1; c <= 14; c++) sheet.getCell(r, c).fill = (terminals.indexOf(t) % 2 === 1)
       ? { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F2F2' } }
