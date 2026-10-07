@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
 import ExcelJS from 'exceljs';
 import { unzipSync, strFromU8 } from 'fflate';
-import { PON_HEADERS, preparePonPower, staggeredFilename, findPonDuplicateGroups, applyPonDistances } from './ponpower';
+import { LEGACY_PON_HEADERS as PON_HEADERS, preparePonPower, staggeredFilename, findPonDuplicateGroups, applyPonDistances } from './ponpower';
 import { writeExcelWorkbook } from './xlsx-export';
 import { parseExfoXlsx } from './exfo';
 
@@ -18,13 +18,13 @@ test('preview/export work without data, preserving embedded tasks when available
     const saved = new ExcelJS.Workbook();
     await saved.xlsx.load(await result.workbook.xlsx.writeBuffer());
     const sheet = saved.getWorksheet(result.sheetName)!;
-    assert.ok(sheet.getCell('F6').value);
-    assert.ok(sheet.getCell('M6').formula.includes("'Task'!$F:$F"));
+    assert.ok(sheet.getCell('G6').value);
+    assert.ok(sheet.getCell('C6').formula.includes("'Task'!$F:$F"));
     assert.ok(saved.getWorksheet('Task'));
     if (path.includes('stag_Text')) assert.equal(result.matchedTasks, 188);
     else {
       assert.equal(result.matchedTasks, 0);
-      assert.equal(sheet.getCell('M6').text, '');
+      assert.equal(sheet.getCell('C6').text, '');
       assert.equal(sheet.getCell('N6').text, '');
     }
   }
@@ -50,10 +50,10 @@ test('task lookup matches cable and starting count only, including split counts 
   const saved = new ExcelJS.Workbook();
   await saved.xlsx.load(await result.workbook.xlsx.writeBuffer());
   assert.equal(result.matchedTasks, 1);
-  assert.equal(saved.getWorksheet(result.sheetName)!.getCell('M6').result, '1.493');
+  assert.equal(saved.getWorksheet(result.sheetName)!.getCell('C6').result, '1.493');
   assert.equal(saved.getWorksheet(result.sheetName)!.getCell('N6').result, 'C');
-  assert.equal(saved.getWorksheet(result.sheetName)!.getCell('M6').formula,
-    `IFERROR(INDEX('Task'!$A:$A,MATCH("*PON4250WRR,"&TRIM(LEFT(D6,FIND("-",D6)-1))&"-*",'Task'!$F:$F,0)),"")`);
+  assert.equal(saved.getWorksheet(result.sheetName)!.getCell('C6').formula,
+    `IFERROR(INDEX('Task'!$A:$A,MATCH("*PON4250WRR,"&TRIM(LEFT(E6,FIND("-",E6)-1))&"-*",'Task'!$F:$F,0)),"")`);
 });
 
 test('all 188 staggered ports and strands match the reference; task rows survive export', async () => {
@@ -68,8 +68,8 @@ test('all 188 staggered ports and strands match the reference; task rows survive
   const actual = reloaded.getWorksheet('PON TEST SHEET')!;
   const expected = original.getWorksheet('PON TEST SHEET')!;
   for (let r = 6; r <= 193; r++) {
-    for (let c = 1; c <= 12; c++) assert.deepEqual(actual.getCell(r, c).value, expected.getCell(r, c).value, `cell ${r},${c}`);
-    assert.ok(actual.getCell(r, 13).result, `task at row ${r}`);
+    for (let c = 1; c <= 12; c++) assert.deepEqual(actual.getCell(r, c < 3 ? c : c + 1).value, expected.getCell(r, c).value, `cell ${r},${c}`);
+    assert.ok(actual.getCell(r, 3).result, `task at row ${r}`);
   }
   assert.equal(reloaded.getWorksheet('Task')!.getCell('A2').value, '1.499');
   assert.equal(reloaded.getWorksheet('Task')!.getCell('G2').value, 'F 4303 W WOODWARD DR');
@@ -84,10 +84,10 @@ test('legacy Ponsheet converts to compact layout and unmatched project tasks sta
   assert.equal(result.matchedTasks, 0);
   const s = result.workbook.getWorksheet('PON TEST SHEET')!;
   assert.equal(s.getCell('B6').text, 'S 920 E POTTER AVE CFST');
-  assert.equal(s.getCell('F6').value, 1);
-  assert.equal(s.getCell('G6').value, 5);
-  assert.equal(s.getCell('M6').result, '');
-  assert.equal(s.getCell('H6').value, null);
+  assert.equal(s.getCell('G6').value, 1);
+  assert.equal(s.getCell('H6').value, 5);
+  assert.equal(s.getCell('C6').text, '');
+  assert.equal(s.getCell('I6').value, null);
 });
 
 test('pasted Orca rows populate status lookups and reject malformed input', async () => {
@@ -120,7 +120,7 @@ test('reconstructed source and data reproduce every reference terminal', async (
   assert.equal(result.matchedTasks, 188);
   for (let r = 6; r <= 193; r++) {
     for (let c = 1; c <= 12; c++) {
-      assert.deepEqual(result.workbook.getWorksheet(result.sheetName)!.getCell(r, c).value,
+      assert.deepEqual(result.workbook.getWorksheet(result.sheetName)!.getCell(r, c < 3 ? c : c + 1).value,
         reference.worksheets[0].getCell(r, c).value, `row ${r}, column ${c}`);
     }
   }
@@ -213,14 +213,14 @@ test('PON conflicts use F2 strand groups, default first, and preserve unique str
 test('rejected distances clear imported and previously exported footage; confirming restores it', async () => {
   const result = await preparePonPower(await file('examples/PON_TEST_SHEET__17_.xlsx'));
   const sheet = result.workbook.getWorksheet(result.sheetName)!;
-  sheet.getCell('H6').value = 500000;
+  sheet.getCell('I6').value = 500000;
   applyPonDistances(result, new Map([[7, 1000]]), new Set([6]));
   const saved = new ExcelJS.Workbook();
   await saved.xlsx.load(await writeExcelWorkbook(result.workbook));
-  assert.equal(saved.getWorksheet(result.sheetName)!.getCell('H6').value, null);
-  assert.equal(saved.getWorksheet(result.sheetName)!.getCell('H7').value, 1000);
+  assert.equal(saved.getWorksheet(result.sheetName)!.getCell('I6').value, null);
+  assert.equal(saved.getWorksheet(result.sheetName)!.getCell('I7').value, 1000);
   applyPonDistances(result, new Map([[6, 500000]]), new Set());
-  assert.equal(sheet.getCell('H6').value, 500000);
+  assert.equal(sheet.getCell('I6').value, 500000);
 });
 
 
@@ -265,7 +265,7 @@ test('Orca exports the reference B/C layout and Status formulas survive old and 
   assert.equal(orca.getCell('I2').text, 'H');
   assert.deepEqual(orca.model.merges, []);
   const status = result.workbook.getWorksheet(result.sheetName)!.getCell('N17');
-  assert.equal(status.formula, `IF(M17="","",IFERROR(INDEX('Orca'!$C:$C,MATCH(--M17,'Orca'!$B:$B,0)),""))`);
+  assert.equal(status.formula, `IF(C17="","",IFERROR(INDEX('Orca'!$C:$C,MATCH(--C17,'Orca'!$B:$B,0)),""))`);
   assert.equal(status.result, 'O');
   orca.getRow(2).height = 60;
   orca.getColumn(6).width = 100;
@@ -286,4 +286,29 @@ test('Orca exports the reference B/C layout and Status formulas survive old and 
   const blank = await preparePonPower(await file('PONSHEET.xlsx'));
   assert.equal(blank.workbook.getWorksheet('Orca')!.getCell('A2').text, 'Paste Here');
   assert.equal(blank.workbook.getWorksheet('Orca')!.getCell('C1').text, 'Status');
+});
+
+
+test('Task moves to C and every exported row alternates white/gray after reimport', async () => {
+  let input = await file('examples/PON_TEST_SHEET__17__stag_Text.xlsx');
+  for (let pass = 0; pass < 2; pass++) {
+    const result = await preparePonPower(input);
+    const bytes = await writeExcelWorkbook(result.workbook);
+    const saved = new ExcelJS.Workbook();
+    await saved.xlsx.load(bytes);
+    const sheet = saved.getWorksheet(result.sheetName)!;
+    assert.deepEqual(Array.from({ length: 5 }, (_, i) => sheet.getCell(5, i + 1).text), ['#', 'Terminal', 'Task', 'Waldo ID', 'PON Count']);
+    for (let r = 6; r <= result.terminals.length + 5; r++) {
+      assert.ok(sheet.getCell(r, 3).formula.includes(`LEFT(E${r},`));
+      assert.ok(sheet.getCell(r, 14).formula.includes(`MATCH(--C${r},`));
+      for (let c = 1; c <= 14; c++) {
+        assert.deepEqual(sheet.getCell(r, c).fill, { type: 'pattern', pattern: 'solid', fgColor: { argb: r % 2 === 0 ? 'FFFFFFFF' : 'FFF2F2F2' } }, `row ${r}, col ${c}`);
+      }
+    }
+    const parsed = parseExfoXlsx(bytes.buffer as ArrayBuffer);
+    assert.equal(parsed.terminals.length, result.terminals.length);
+    assert.equal(parsed.terminals[0].waldo, result.terminals[0].waldoId);
+    assert.equal(parsed.terminals[0].powerStrand, result.terminals[0].staggeredStrand);
+    input = new File([bytes], 'reimport.xlsx');
+  }
 });

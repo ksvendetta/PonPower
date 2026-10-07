@@ -839,7 +839,7 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
                       <TableRow key={t.rowIndex} className={rowNumber % 2 === 1 ? 'bg-muted/30' : ''}>
                         {PON_HEADERS.map((header, i) => (
                           <TableCell key={header} className="whitespace-nowrap">
-                            {i === 7 && distanceReview.suppressedRows.has(t.rowIndex + 1) ? '' : i === 7 && footageByRowIndex.has(t.rowIndex) ? Math.round(footageByRowIndex.get(t.rowIndex)!).toLocaleString() : parsedWorkbook?.workbook.getWorksheet(parsedWorkbook.sheetName)?.getCell(t.rowIndex + 1, i + 1).text}
+                            {i === 8 && distanceReview.suppressedRows.has(t.rowIndex + 1) ? '' : i === 8 && footageByRowIndex.has(t.rowIndex) ? Math.round(footageByRowIndex.get(t.rowIndex)!).toLocaleString() : parsedWorkbook?.workbook.getWorksheet(parsedWorkbook.sheetName)?.getCell(t.rowIndex + 1, i + 1).text}
                           </TableCell>
                         ))}
                       </TableRow>

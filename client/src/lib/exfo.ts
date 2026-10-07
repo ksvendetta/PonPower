@@ -104,17 +104,18 @@ export function parseExfoXlsx(arrayBuffer: ArrayBuffer): ExfoXlsxParse {
   };
 
   // Exported compact PON sheets have one terminal per row and header metadata.
-  if (String(get(5, 2) ?? '').trim() === 'Terminal' && String(get(5, 4) ?? '').trim() === 'PON Count') {
+  const compactShift = String(get(5, 3) ?? '').trim() === 'Task' ? 1 : 0;
+  if (String(get(5, 2) ?? '').trim() === 'Terminal' && String(get(5, 4 + compactShift) ?? '').trim() === 'PON Count') {
     const cable = String(get(2, 8) ?? '').replace(/^CABLE ID:\s*/i, '').trim();
     const terminals: ExfoTerminal[] = [];
     for (let r = 6; r <= aoa.length; r++) {
       const terminal = String(get(r, 2) ?? '').trim();
       if (!terminal) continue;
-      const strands = parseStrandList(get(r, 4));
-      const powerStrand = Number(get(r, 7)) > 0 ? Number(get(r, 7)) : strands[0] ?? null;
-      terminals.push({ row: r, terminal, waldo: String(get(r, 3) ?? '').trim(), cable,
+      const strands = parseStrandList(get(r, 4 + compactShift));
+      const powerStrand = Number(get(r, 7 + compactShift)) > 0 ? Number(get(r, 7 + compactShift)) : strands[0] ?? null;
+      terminals.push({ row: r, terminal, waldo: String(get(r, 3 + compactShift) ?? '').trim(), cable,
         powerStrand,
-        otdrRaw: String(get(r, 4) ?? ''), otdrStrands: strands.filter(strand => strand !== powerStrand), total: Number(get(r, 5)) || null });
+        otdrRaw: String(get(r, 4 + compactShift) ?? ''), otdrStrands: strands.filter(strand => strand !== powerStrand), total: Number(get(r, 5 + compactShift)) || null });
     }
     return { sheetName, terminals, meta: { terminals: terminals.length },
       project: String(get(2, 4) ?? '').replace(/^PROJECT:\s*/i, '').trim() || null,

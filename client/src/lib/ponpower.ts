@@ -4,7 +4,17 @@ import { parseTerminals, type Terminal } from './excel';
 import { buildCandidates, findWaldoDuplicateGroups, findFiberDuplicateGroups, clusterFiberGroupsByParticipants, parseStrandList, type ExfoTerminal } from './exfo';
 import { cleanCellText, normalizeWorkbookCells } from './xlsx-export';
 
-export const PON_HEADERS = ['#', 'Terminal', 'Waldo ID', 'PON Count', 'Total Strands', 'Test Port', 'Test Strand', 'Estm FT', 'Real FT', 'Failed Strand', 'Lost', '@FT', 'Task', 'Status'];
+export const LEGACY_PON_HEADERS = ['#', 'Terminal', 'Waldo ID', 'PON Count', 'Total Strands', 'Test Port', 'Test Strand', 'Estm FT', 'Real FT', 'Failed Strand', 'Lost', '@FT', 'Task', 'Status'];
+export const PON_HEADERS = ['#', 'Terminal', 'Task', 'Waldo ID', 'PON Count', 'Total Strands', 'Test Port', 'Test Strand', 'Estm FT', 'Real FT', 'Failed Strand', 'Lost', '@FT', 'Status'];
+
+function reorderDataColumns(sheet: ExcelJS.Worksheet, columns: number[]) {
+  sheet.eachRow((row, r) => {
+    if (r < 5) return;
+    const cells = columns.map(c => ({ value: row.getCell(c).value, style: { ...row.getCell(c).style } }));
+    cells.forEach((cell, i) => { row.getCell(i + 1).value = cell.value; row.getCell(i + 1).style = cell.style; });
+  });
+}
+
 const TASK_HEADERS = ['Print.Task', 'FRC', 'WAC', 'Terminal Type', 'Terminal Desc', 'Terminal Count', 'Terminal Address'];
 
 export interface PonPowerResult {
@@ -58,7 +68,10 @@ export async function preparePonPower(ponFile: File, dataFile: File | null = nul
   const source = workbook.worksheets.find(s => s.getCell('B5').text === 'Terminal') ?? workbook.worksheets[0];
   if (!source) throw new Error('The Ponsheet workbook has no worksheets.');
   normalizeWorkbookCells(workbook);
-  const compact = PON_HEADERS.slice(0, 7).every((h, i) => source.getCell(5, i + 1).text === h);
+  if (PON_HEADERS.every((h, i) => source.getCell(5, i + 1).text === h)) {
+    reorderDataColumns(source, [1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 3, 14]);
+  }
+  const compact = LEGACY_PON_HEADERS.slice(0, 7).every((h, i) => source.getCell(5, i + 1).text === h);
   let terminals: Terminal[];
   let project: string;
   let cableId: string;
@@ -93,7 +106,7 @@ export async function preparePonPower(ponFile: File, dataFile: File | null = nul
     sheet.getCell('H2').value = `CABLE ID:  ${cableId}`;
     sheet.getCell('A3').value = `TOTAL STRANDS:  ${terminals.reduce((n, t) => n + t.totalStrands, 0)}`;
     sheet.getCell('G3').value = `TERMINALS:  ${terminals.length}`;
-    sheet.getRow(5).values = PON_HEADERS;
+    sheet.getRow(5).values = LEGACY_PON_HEADERS;
     const widths = [5, 30, 12, 12, 14, 11, 12, 10, 10, 13, 10, 10, 14, 10];
     widths.forEach((width, i) => { sheet.getColumn(i + 1).width = width; });
     terminals = terminals.map((t, i) => {
@@ -226,12 +239,15 @@ export async function preparePonPower(ponFile: File, dataFile: File | null = nul
     const task = taskRows.find(row => row.count.includes(`${t.cableId.trim()},${t.powerTestStrand}-`.toUpperCase()))?.task;
     if (task != null) matchedTasks++;
     const escapedCable = t.cableId.trim().replace(/[~*?]/g, '~$&').replace(/"/g, '""');
-    sheet.getCell(r, 13).value = { formula: `IFERROR(INDEX('Task'!$A:$A,MATCH("*${escapedCable},"&TRIM(LEFT(D${r},FIND("-",D${r})-1))&"-*",'Task'!$F:$F,0)),"")`, result: task ?? '' };
-    sheet.getCell(r, 14).value = { formula: `IF(M${r}="","",IFERROR(INDEX('Orca'!$C:$C,MATCH(--M${r},'Orca'!$B:$B,0)),""))`, result: task == null ? '' : statuses.get(String(Number(task))) ?? '' };
+    sheet.getCell(r, 13).value = { formula: `IFERROR(INDEX('Task'!$A:$A,MATCH("*${escapedCable},"&TRIM(LEFT(E${r},FIND("-",E${r})-1))&"-*",'Task'!$F:$F,0)),"")`, result: task ?? '' };
+    sheet.getCell(r, 14).value = { formula: `IF(C${r}="","",IFERROR(INDEX('Orca'!$C:$C,MATCH(--C${r},'Orca'!$B:$B,0)),""))`, result: task == null ? '' : statuses.get(String(Number(task))) ?? '' };
     // Status conditional fills override this light-gray alternating background.
-    for (let c = 1; c <= 14; c++) sheet.getCell(r, c).fill = (terminals.indexOf(t) % 2 === 1)
-      ? { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F2F2' } }
-      : { type: 'pattern', pattern: 'none' };
+    for (let c = 1; c <= 14; c++) {
+      const cell = sheet.getCell(r, c);
+      // Imported cells can share a style object; detach before assigning row fills.
+      cell.style = { ...cell.style };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: r % 2 === 0 ? 'FFFFFFFF' : 'FFF2F2F2' } };
+    }
   }
   const lastRow = Math.max(...terminals.map(t => t.rowIndex + 1));
   sheet.autoFilter = `A5:N${lastRow}`;
@@ -250,6 +266,7 @@ export async function preparePonPower(ponFile: File, dataFile: File | null = nul
       { type: 'expression', priority: 2, formulae: ['$N6="C"'], style: { fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC6E0B4' }, bgColor: { argb: 'FFC6E0B4' } } } },
     ],
   });
+  reorderDataColumns(sheet, [1, 2, 13, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14]);
   workbook.calcProperties.fullCalcOnLoad = true;
   normalizeWorkbookCells(workbook);
   return { workbook, sheetName: sheet.name, terminals, matchedTasks, project, cableId, duplicateGroups };
@@ -264,7 +281,7 @@ export function applyPonDistances(result: PonPowerResult, distances: Map<number,
   const sheet = result.workbook.getWorksheet(result.sheetName)!;
   for (const terminal of result.terminals) {
     const row = terminal.rowIndex + 1;
-    if (suppressedRows.has(row)) sheet.getCell(row, 8).value = null;
-    else if (distances.has(row)) sheet.getCell(row, 8).value = Math.round(distances.get(row)!);
+    if (suppressedRows.has(row)) sheet.getCell(row, 9).value = null;
+    else if (distances.has(row)) sheet.getCell(row, 9).value = Math.round(distances.get(row)!);
   }
 }
