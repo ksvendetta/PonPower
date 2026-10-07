@@ -204,6 +204,14 @@ export async function preparePonPower(ponFile: File, dataFile: File | null = nul
   orca.addRow(['', ...orcaHeaders]);
   orcaRows.forEach(row => orca.addRow(['', ...row]));
   orca.getCell('A2').value = 'Paste Here';
+  // Cover future pasted rows as well as the currently populated Orca data.
+  orca.addConditionalFormatting({
+    ref: 'A2:I1048576',
+    rules: [{
+      type: 'expression', priority: 1, formulae: ['MOD(ROW(),2)=1'],
+      style: { fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F2F2' }, bgColor: { argb: 'FFF2F2F2' } } },
+    }],
+  });
   const statuses = new Map<string, string>();
   orca.eachRow((row, r) => {
     const task = row.getCell(2).text.trim();
