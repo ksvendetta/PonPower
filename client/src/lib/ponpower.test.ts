@@ -182,7 +182,7 @@ test('all cells export centered with consistent fonts, cleaned strings, gray str
   }));
 });
 
-test('overlapping PON groups are cable-scoped and chosen terminals alone survive export', async () => {
+test('PON conflicts use F2 strand groups, default first, and preserve unique strands', async () => {
   const pon = new ExcelJS.Workbook();
   const sheet = pon.addWorksheet('PON TEST SHEET');
   sheet.getRow(5).values = PON_HEADERS;
@@ -202,7 +202,12 @@ test('overlapping PON groups are cable-scoped and chosen terminals alone survive
   const parsed = parseExfoXlsx((await writeExcelWorkbook(chosen.workbook)).buffer as ArrayBuffer);
   assert.equal(parsed.terminals.length, 2);
   assert.equal(parsed.terminals[0].terminal, 'second');
-  assert.equal(findPonDuplicateGroups([{ ...initial.terminals[0], cableId: 'other' }, initial.terminals[1]]).length, 0);
+  assert.equal(findPonDuplicateGroups([{ ...initial.terminals[0], cableId: 'other' }, initial.terminals[1]]).length, 1);
+  assert.deepEqual(initial.terminals.map(t => t.terminalName), ['first', 'second', 'third']);
+  assert.deepEqual(initial.terminals[1].retainedStrands, [47, 48]);
+  assert.ok([47, 48].includes(initial.terminals[1].staggeredStrand!));
+  // Each strand appears once within an imported compact terminal (no false OPM/iOLM conflict).
+  assert.ok(parsed.terminals.every(t => !t.otdrStrands.includes(t.powerStrand!)));
 });
 
 test('rejected distances clear imported and previously exported footage; confirming restores it', async () => {
@@ -219,3 +224,30 @@ test('rejected distances clear imported and previously exported footage; confirm
 });
 
 
+
+
+test('PON overlaps are grouped by exact F2 participants, without merging overlap chains', async () => {
+  const pon = new ExcelJS.Workbook();
+  const sheet = pon.addWorksheet('PON TEST SHEET');
+  sheet.getRow(5).values = PON_HEADERS;
+  sheet.getRow(6).values = [1, 'A', 'a', '1-4', 4];
+  sheet.getRow(7).values = [2, 'B', 'b', '3-6', 4];
+  sheet.getRow(8).values = [3, 'C', 'c', '5-8', 4];
+  const result = await preparePonPower(new File([await pon.xlsx.writeBuffer()], 'chain.xlsx'));
+  assert.deepEqual(result.duplicateGroups.map(g => g.counts), [[3, 4], [5, 6]]);
+  assert.deepEqual(result.terminals.map(t => t.retainedStrands), [[1, 2, 3, 4], [5, 6], [7, 8]]);
+});
+
+test('PON resolves duplicate Waldo IDs before Fiber ID conflicts, as F2 does', async () => {
+  const pon = new ExcelJS.Workbook();
+  const sheet = pon.addWorksheet('PON TEST SHEET');
+  sheet.getRow(5).values = PON_HEADERS;
+  sheet.getRow(6).values = [1, 'A', 'same', '1-2', 2];
+  sheet.getRow(7).values = [2, 'B', 'same', '3-4', 2];
+  const input = new File([await pon.xlsx.writeBuffer()], 'waldo.xlsx');
+  const initial = await preparePonPower(input);
+  assert.equal(initial.duplicateGroups[0].kind, 'waldo');
+  assert.deepEqual(initial.terminals.map(t => t.terminalName), ['A']);
+  const selected = await preparePonPower(input, null, '', new Map([['waldo:same', 6]]));
+  assert.deepEqual(selected.terminals.map(t => t.terminalName), ['B']);
+});

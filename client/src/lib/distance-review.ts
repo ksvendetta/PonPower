@@ -37,11 +37,10 @@ export function findDistanceOutliers(points: Map<number, MapPoint>, pfp: MapPoin
   components.sort((a, b) => b.length - a.length);
   const remote = new Set(components[0].length >= entries.length * 0.6
     ? components.slice(1).filter(group => group.length <= Math.max(1, entries.length * 0.2)).flat() : []);
-  const pfpIsolated = pfp && Math.min(...entries.map(([, p]) => manhattanFeet(pfp, p))) > thresholdFeet;
-  return nearest.filter(p => p.nearestFeet > thresholdFeet || remote.has(p.row) || pfpIsolated).map(p => ({ ...p, averageFeet, thresholdFeet, reason: pfpIsolated ? 'pfp' : remote.has(p.row) && p.nearestFeet <= thresholdFeet ? 'cluster' : 'terminal' }));
+  return nearest.filter(p => p.nearestFeet > thresholdFeet || remote.has(p.row)).map(p => ({ ...p, averageFeet, thresholdFeet, reason: remote.has(p.row) && p.nearestFeet <= thresholdFeet ? 'cluster' : 'terminal' }));
 }
 
 export function reviewedDistances(raw: Map<number, number>, outliers: DistanceOutlier[], decisions: Map<number, 'keep' | 'exclude'>, activeRows: Set<number>): Map<number, number> {
   const flagged = new Set(outliers.map(o => o.row));
-  return new Map(Array.from(raw).filter(([row, ft]) => activeRows.has(row) && Number.isFinite(ft) && ft >= 0 && (!flagged.has(row) || decisions.get(row) === 'keep')));
+  return new Map(Array.from(raw).filter(([row, ft]) => activeRows.has(row) && Number.isFinite(ft) && ft >= 0 && decisions.get(row) !== 'exclude' && (!flagged.has(row) || decisions.get(row) === 'keep')));
 }

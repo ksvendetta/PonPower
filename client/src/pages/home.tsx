@@ -79,7 +79,6 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
   const [parsedWorkbook, setParsedWorkbook] = useState<PonPowerResult | null>(null);
   const [staggeredTerminals, setStaggeredTerminals] = useState<Terminal[]>([]);
   const [duplicateChoices, setDuplicateChoices] = useState<Map<string, number>>(new Map());
-  const pendingDuplicates = parsedWorkbook?.duplicateGroups.some(g => !duplicateChoices.has(g.key)) ?? false;
 
   // ----- Map state (mirrors F2 Exfo) -----
   const [parsedExfo, setParsedExfo] = useState<ExfoXlsxParse | null>(null);
@@ -194,17 +193,16 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
     preparePonPower(file, dataFile, orcaText, duplicateChoices).then(result => {
       if (cancelled) return;
       setParsedWorkbook(result);
-      if (result.duplicateGroups.some(g => !duplicateChoices.has(g.key))) return;
       setStaggeredTerminals(result.terminals);
       setCableId(result.cableId);
       setCfas(result.project);
-      setStrands(result.terminals.map(t => t.powerTestStrand));
+      setStrands(result.terminals.map(t => t.retainedStrands?.[0] ?? t.powerTestStrand));
       const sheet = result.workbook.getWorksheet(result.sheetName)!;
       setParsedExfo({ sheetName: result.sheetName, project: result.project, meta: {},
         pfpName: sheet.getCell('A2').text.replace(/^PFP:\s*/i, '').trim() || null,
         terminals: result.terminals.map(t => ({ row: t.rowIndex + 1, waldo: t.waldoId, terminal: t.terminalName, cable: t.cableId,
-          powerStrand: t.powerTestStrand, total: t.totalStrands, otdrRaw: t.otdrTestStrand,
-          otdrStrands: Array.from({ length: t.totalStrands }, (_, i) => t.powerTestStrand + i) })) });
+          powerStrand: t.retainedStrands?.[0] ?? t.powerTestStrand, total: t.totalStrands, otdrRaw: t.otdrTestStrand,
+          otdrStrands: (t.retainedStrands ?? []).slice(1) })) });
     }).catch(err => {
       if (!cancelled) setConversionError(err instanceof Error ? err.message : "Could not read the uploaded files.");
     }).finally(() => { if (!cancelled) setIsProcessing(false); });
@@ -539,7 +537,7 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
   };
 
   const handleDownloadConverted = async () => {
-    if (!parsedWorkbook || staggeredTerminals.length === 0 || pendingDuplicates) return;
+    if (!parsedWorkbook || staggeredTerminals.length === 0) return;
     try {
       const sheet = parsedWorkbook.workbook.getWorksheet(parsedWorkbook.sheetName)!;
       applyPonDistances(parsedWorkbook, distances, distanceReview.suppressedRows);
@@ -667,11 +665,11 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
                 </p>}
                 {!!parsedWorkbook?.duplicateGroups.length && <div className="space-y-3 rounded border border-amber-500/50 p-3">
                   <p className="text-sm font-semibold">Duplicate PON counts — choose which terminal to keep</p>
-                  <p className="text-xs text-muted-foreground">Other terminals in each overlapping group are excluded from the preview, spreadsheet, report, and map.</p>
+                  <p className="text-xs text-muted-foreground">Like F2 Exfo, the first entry is kept by default. Waldo conflicts choose a terminal; Fiber ID conflicts choose the duplicate strands to keep. Unique strands remain available.</p>
                   {parsedWorkbook.duplicateGroups.map(group => <div key={group.key} className="space-y-2 border-t pt-2">
-                    <p className="text-xs">{group.cableId} · duplicate PON {group.counts.join(', ')}</p>
+                    <p className="text-xs">{group.kind === 'waldo' ? `Waldo ID: ${group.cableId}` : `Fiber ID (grouped by terminal): ${group.counts.join(', ')}`}</p>
                     {group.items.map(t => <label key={t.rowIndex} className="flex gap-2 items-center text-xs cursor-pointer">
-                      <input type="radio" name={`pon-duplicate-${group.key}`} checked={duplicateChoices.get(group.key) === t.rowIndex}
+                      <input type="radio" name={`pon-duplicate-${group.key}`} checked={(duplicateChoices.get(group.key) ?? group.items[0].rowIndex) === t.rowIndex}
                         onChange={() => setDuplicateChoices(current => new Map(current).set(group.key, t.rowIndex))} />
                       {t.terminalName} · Waldo {t.waldoId} · PON {t.powerTestStrand}-{t.powerTestStrand + t.totalStrands - 1} · row {t.rowIndex + 1}
                     </label>)}
@@ -852,7 +850,7 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
             ) : (
               <div className="flex flex-col items-center justify-center text-muted-foreground py-16 opacity-50">
                 <FileSpreadsheet className="w-12 h-12 mb-2" />
-                <p>{pendingDuplicates ? 'Choose which duplicate PON terminals to keep before previewing' : 'Upload a Ponsheet to preview the staggered sheet'}</p>
+                <p>Upload a Ponsheet to preview the staggered sheet</p>
               </div>
             )}
           </CardContent>

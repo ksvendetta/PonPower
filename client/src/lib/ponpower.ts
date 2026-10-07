@@ -1,6 +1,7 @@
 import ExcelJS from 'exceljs';
 import * as XLSX from 'xlsx';
 import { parseTerminals, type Terminal } from './excel';
+import { buildCandidates, findWaldoDuplicateGroups, findFiberDuplicateGroups, clusterFiberGroupsByParticipants, parseStrandList, type ExfoTerminal } from './exfo';
 import { cleanCellText, normalizeWorkbookCells } from './xlsx-export';
 
 export const PON_HEADERS = ['#', 'Terminal', 'Waldo ID', 'PON Count', 'Total Strands', 'Test Port', 'Test Strand', 'Estm FT', 'Real FT', 'Failed Strand', 'Lost', '@FT', 'Task', 'Status'];
@@ -16,34 +17,38 @@ export interface PonPowerResult {
   duplicateGroups: PonDuplicateGroup[];
 }
 
-export interface PonDuplicateGroup { key: string; cableId: string; counts: number[]; items: Terminal[] }
+export interface PonDuplicateGroup { key: string; kind: 'waldo' | 'fiber'; cableId: string; counts: number[]; items: Terminal[] }
 
-/** Merge overlapping PON ranges into one choice per connected group, scoped to cable. */
-export function findPonDuplicateGroups(terminals: Terminal[]): PonDuplicateGroup[] {
-  const groups: Terminal[][] = [];
-  for (const terminal of terminals) {
-    const overlaps = groups.filter(group => group.some(t => t.cableId.trim().toUpperCase() === terminal.cableId.trim().toUpperCase() &&
-      t.powerTestStrand <= terminal.powerTestStrand + terminal.totalStrands - 1 && terminal.powerTestStrand <= t.powerTestStrand + t.totalStrands - 1));
-    const merged = [terminal, ...overlaps.flat()];
-    for (const group of overlaps) groups.splice(groups.indexOf(group), 1);
-    groups.push(merged);
-  }
-  return groups.filter(g => g.length > 1).map(items => {
-    items.sort((a, b) => a.rowIndex - b.rowIndex);
-    const counts = new Map<number, number>();
-    for (const t of items) for (let n = t.powerTestStrand; n < t.powerTestStrand + t.totalStrands; n++) counts.set(n, (counts.get(n) ?? 0) + 1);
-    return { key: items.map(t => t.rowIndex).join(','), cableId: items[0].cableId, counts: Array.from(counts).filter(([, n]) => n > 1).map(([n]) => n).sort((a, b) => a - b), items };
+function asExfoTerminals(terminals: Terminal[]): ExfoTerminal[] {
+  return terminals.map(t => ({ row: t.rowIndex, terminal: t.terminalName, waldo: t.waldoId, cable: t.cableId,
+    powerStrand: t.powerTestStrand, total: t.totalStrands, otdrRaw: t.otdrTestStrand,
+    otdrStrands: parseStrandList(t.otdrTestStrand) }));
+}
+
+/** Use F2 Exfo's Waldo-first, then exact-participant Fiber ID conflict workflow. */
+export function findPonDuplicateGroups(terminals: Terminal[], choices = new Map<string, number>()): PonDuplicateGroup[] {
+  const exfo = asExfoTerminals(terminals);
+  const excluded = new Set<number>();
+  const waldoGroups = findWaldoDuplicateGroups(exfo).map(group => {
+    const key = `waldo:${group.waldo}`;
+    const winner = group.items.find(t => t.row === choices.get(key)) ?? group.items[0];
+    group.items.forEach(t => { if (t.row !== winner.row) excluded.add(t.row); });
+    return { key, kind: 'waldo' as const, cableId: group.waldo, counts: [], items: terminals.filter(t => group.items.some(e => e.row === t.rowIndex)) };
   });
+  const clusters = clusterFiberGroupsByParticipants(findFiberDuplicateGroups(buildCandidates(exfo, 'iOLM', excluded)));
+  return [...waldoGroups, ...clusters.map(cluster => ({ key: `fiber:${cluster.participantRows.join(',')}`, kind: 'fiber' as const,
+    cableId: '', counts: cluster.groups.map(g => g.strand), items: terminals.filter(t => cluster.participantRows.includes(t.rowIndex)) }))];
 }
 
 /** Advance through ports 1–4, skipping ports unavailable on this terminal. */
 export function staggerPonTerminals(terminals: Terminal[]): Terminal[] {
   let nextPort = 1;
   return terminals.map(t => {
-    const ports = t.totalStrands === 2 ? [2, 3] : Array.from({ length: Math.min(t.totalStrands, 4) }, (_, i) => i + 1);
+    const originalPorts = t.totalStrands === 2 ? [2, 3] : Array.from({ length: Math.min(t.totalStrands, 4) }, (_, i) => i + 1);
+    const ports = originalPorts.filter(p => !t.retainedStrands || t.retainedStrands.includes(t.powerTestStrand + p - originalPorts[0]));
     const port = ports.find(p => p >= nextPort) ?? ports[0];
     nextPort = port % 4 + 1;
-    return { ...t, staggeredPort: port, staggeredStrand: t.powerTestStrand + port - ports[0] };
+    return { ...t, staggeredPort: port, staggeredStrand: t.powerTestStrand + port - originalPorts[0] };
   });
 }
 
@@ -68,7 +73,7 @@ export async function preparePonPower(ponFile: File, dataFile: File | null = nul
       const power = Number(row.getCell(4).text.split('-')[0]);
       const total = Number(row.getCell(5).value);
       if (!Number.isInteger(power) || power <= 0 || !Number.isInteger(total) || total <= 0) throw new Error(`Invalid PON count or total strands at row ${r}.`);
-      terminals.push({ rowIndex: r - 1, terminalName: row.getCell(2).text, waldoId: row.getCell(3).text, cableId, powerTestStrand: power, totalStrands: total, otdrTestStrand: '', testpQty: '', testpaQty: '' });
+      terminals.push({ rowIndex: r - 1, terminalName: row.getCell(2).text, waldoId: row.getCell(3).text, cableId, powerTestStrand: power, totalStrands: total, otdrTestStrand: Array.from({ length: total - 1 }, (_, i) => power + i + 1).join(','), testpQty: '', testpaQty: '' });
     });
   } else {
     const parsed = await parseTerminals(ponFile);
@@ -110,14 +115,23 @@ export async function preparePonPower(ponFile: File, dataFile: File | null = nul
   }
   if (!terminals.length) throw new Error('No terminals found in the Ponsheet.');
   terminals = terminals.map(t => ({ ...t, terminalName: cleanCellText(t.terminalName), waldoId: cleanCellText(t.waldoId), cableId: cleanCellText(t.cableId) }));
-  const duplicateGroups = findPonDuplicateGroups(terminals);
+  const duplicateGroups = findPonDuplicateGroups(terminals, duplicateChoices);
   const excludedRows = new Set<number>();
-  for (const group of duplicateGroups) {
-    const kept = duplicateChoices.get(group.key);
-    if (kept != null && group.items.some(t => t.rowIndex === kept)) {
-      group.items.forEach(t => { if (t.rowIndex !== kept) excludedRows.add(t.rowIndex); });
+  for (const group of duplicateGroups.filter(g => g.kind === 'waldo')) {
+    const winner = group.items.find(t => t.rowIndex === duplicateChoices.get(group.key)) ?? group.items[0];
+    group.items.forEach(t => { if (t !== winner) excludedRows.add(t.rowIndex); });
+  }
+  const candidates = buildCandidates(asExfoTerminals(terminals), 'iOLM', excludedRows);
+  const excludedCandidates = new Set<string>();
+  for (const cluster of clusterFiberGroupsByParticipants(findFiberDuplicateGroups(candidates))) {
+    const winner = duplicateChoices.get(`fiber:${cluster.participantRows.join(',')}`);
+    for (const group of cluster.groups) {
+      const kept = group.items.find(c => c.terminalRow === winner) ?? group.items[0];
+      group.items.forEach(c => { if (c.key !== kept.key) excludedCandidates.add(c.key); });
     }
   }
+  terminals = terminals.map(t => ({ ...t, retainedStrands: candidates.filter(c => c.terminalRow === t.rowIndex && !excludedCandidates.has(c.key)).map(c => c.strand) }));
+  terminals.forEach(t => { if (!t.retainedStrands?.length) excludedRows.add(t.rowIndex); });
   if (excludedRows.size) {
     const oldLast = sheet.rowCount;
     const kept = terminals.filter(t => !excludedRows.has(t.rowIndex));

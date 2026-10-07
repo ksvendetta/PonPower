@@ -17,11 +17,10 @@ test('nearest-neighbor average detects isolated pins without letting them inflat
   assert.deepEqual(findDistanceOutliers(new Map([[1, hit(44, -88)], [2, hit(44.001, -88)], [3, hit(44.002, -88)], [4, hit(44.003, -88)]]), pfp), []);
 });
 
-test('a bad PFP geocode flags measurements for review', () => {
+test('a distant PFP does not classify normal terminals as outliers', () => {
   const cluster = new Map([[1, hit(44, -88)], [2, hit(44.001, -88)], [3, hit(44.002, -88)], [4, hit(44.003, -88)]]);
   const flags = findDistanceOutliers(cluster, hit(46, -90));
-  assert.equal(flags.length, 4);
-  assert.ok(flags.every(f => f.reason === 'pfp'));
+  assert.deepEqual(flags, []);
 });
 
 test('a small group of nearby bad pins far from the main cluster is still flagged', () => {
@@ -48,4 +47,6 @@ test('pending and rejected measurements are omitted from shared maps and IOLM sp
   assert.equal(kept.get(4), 500000);
   const excludedTerminal = reviewedDistances(raw, flags, new Map([[4, 'keep']]), new Set([1, 2, 3]));
   assert.equal(excludedTerminal.has(4), false);
+  // Changing duplicate selections can change the baseline; a rejected measurement stays rejected.
+  assert.equal(reviewedDistances(raw, [], new Map([[4, 'exclude']]), active).has(4), false);
 });

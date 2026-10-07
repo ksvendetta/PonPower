@@ -13,6 +13,7 @@ export interface Terminal {
   totalStrands: number;
   testpQty: number | string;
   testpaQty: number | string;
+  retainedStrands?: number[];
   staggeredPort?: number;
   staggeredStrand?: number;
 }

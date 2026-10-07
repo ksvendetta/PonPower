@@ -9,5 +9,7 @@ export function useDistanceReview(raw: Map<number, number>, points: Map<number, 
   const outliers = useMemo(() => findDistanceOutliers(new Map(Array.from(points).filter(([row]) => active.has(row))), pfp), [points, pfp, active]);
   const distances = useMemo(() => reviewedDistances(raw, outliers, decisions, active), [raw, outliers, decisions, active]);
   const decide = (row: number, choice: 'keep' | 'exclude') => setDecisions(current => new Map(current).set(row, choice));
-  return { distances, outliers, decisions, decide, suppressedRows: new Set(outliers.filter(o => decisions.get(o.row) !== 'keep').map(o => o.row)) };
+  const suppressedRows = new Set(outliers.filter(o => decisions.get(o.row) !== 'keep').map(o => o.row));
+  decisions.forEach((choice, row) => { if (choice === 'exclude' && active.has(row)) suppressedRows.add(row); });
+  return { distances, outliers, decisions, decide, suppressedRows };
 }
