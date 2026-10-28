@@ -47,6 +47,8 @@ const REQUIRED: Array<[keyof ExfoJobConfig, string]> = [
   ['wcc', 'PFP CLLI'],
 ];
 
+import { isSharablePonsheet, setSharedPonsheet, useSharedPonsheet } from '@/lib/shared-ponsheet';
+
 const API_KEY_STORAGE = 'f2job.gmapsApiKey';
 const API_KEY_SEEDED = 'f2job.gmapsApiKey.seeded';
 const TECH_UID_STORAGE = 'f2job.techUID';
@@ -62,6 +64,8 @@ export default function Exfo({ publicMode = false }: ExfoProps = {}) {
   const { toast } = useToast();
   const [parsed, setParsed] = useState<ExfoXlsxParse | null>(null);
   const [fileName, setFileName] = useState('No file chosen.');
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const sharedPonsheet = useSharedPonsheet();
   const [cfg, setCfg] = useState<ExfoJobConfig>(DEFAULT_CFG);
   const [excludedTerminals, setExcludedTerminals] = useState<Set<number>>(new Set());
   const [excludedCands, setExcludedCands] = useState<Set<string>>(new Set());
@@ -88,6 +92,7 @@ export default function Exfo({ publicMode = false }: ExfoProps = {}) {
   }>({ gmap: null, gmarkers: [], connections: [], showConnections: false });
   const geocodeCacheRef = useRef<Map<string, GeocodeHit>>(new Map());
   const mapRequestRef = useRef(0);
+  const loadedFileRef = useRef<File | null>(null);
 
   // Load persisted state on mount
   useEffect(() => {
@@ -106,6 +111,7 @@ export default function Exfo({ publicMode = false }: ExfoProps = {}) {
       if (t) setCfg(c => ({ ...c, techID: t }));
     } catch (_) {}
     geocodeCacheRef.current = loadGeocodeCache();
+    setSettingsLoaded(true);
   }, []);
 
   useEffect(() => {
@@ -138,6 +144,8 @@ export default function Exfo({ publicMode = false }: ExfoProps = {}) {
 
   const handleFile = async (file: File) => {
     mapRequestRef.current++;
+    loadedFileRef.current = file;
+    setSharedPonsheet(isSharablePonsheet(file) ? file : null);
     setFileName(file.name);
     try {
       const ab = await file.arrayBuffer();
@@ -171,6 +179,14 @@ export default function Exfo({ publicMode = false }: ExfoProps = {}) {
       setStateBadge({ text: 'Error', tone: 'fail' });
     }
   };
+
+  // Adopt a Ponsheet uploaded on PonPower so the tabs share one workbook.
+  // Waits for the stored API key so the map auto-loads just like a local pick.
+  useEffect(() => {
+    if (!settingsLoaded || !sharedPonsheet) return;
+    if (loadedFileRef.current === sharedPonsheet) return;
+    handleFile(sharedPonsheet);
+  }, [settingsLoaded, sharedPonsheet]);
 
   const missing = useMemo(
     () => REQUIRED.filter(([k]) => !String(cfg[k] || '').trim()).map(([, label]) => label),
@@ -310,6 +326,8 @@ export default function Exfo({ publicMode = false }: ExfoProps = {}) {
 
   const handleClear = () => {
     mapRequestRef.current++;
+    loadedFileRef.current = null;
+    setSharedPonsheet(null);
     setParsed(null);
     setFileName('No file chosen.');
     setExcludedTerminals(new Set());

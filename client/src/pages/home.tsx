@@ -53,6 +53,7 @@ import { AppToggle } from "@/components/app-toggle";
 import { Download, FileJson, Copy, Save, FileSpreadsheet, Settings, MapPin, ExternalLink, Search, Share2, Locate } from "lucide-react";
 
 import { preparePonPower, ponSheetFilename, PON_HEADERS, applyPonDistances, type PonPowerResult } from "@/lib/ponpower";
+import { isSharablePonsheet, setSharedPonsheet, useSharedPonsheet } from "@/lib/shared-ponsheet";
 
 const API_KEY_STORAGE = "f2job.gmapsApiKey";
 const API_KEY_SEEDED = "f2job.gmapsApiKey.seeded";
@@ -65,6 +66,7 @@ interface HomeProps {
 export default function Home({ publicMode = false }: HomeProps = {}) {
   const { toast } = useToast();
   const [file, setFile] = useState<File | null>(null);
+  const sharedPonsheet = useSharedPonsheet();
   const [dataFile, setDataFile] = useState<File | null>(null);
   const [orcaText, setOrcaText] = useState("");
   const [conversionError, setConversionError] = useState("");
@@ -151,6 +153,21 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
         }
       });
     }
+  };
+
+  // Adopt a Ponsheet uploaded on F2 Exfo so the tabs share one workbook.
+  useEffect(() => {
+    if (sharedPonsheet) setFile(current => current ?? sharedPonsheet);
+  }, [sharedPonsheet]);
+
+  const handlePonsheetSelect = (selected: File) => {
+    setFile(selected);
+    setSharedPonsheet(isSharablePonsheet(selected) ? selected : null);
+  };
+
+  const handlePonsheetClear = () => {
+    setFile(null);
+    setSharedPonsheet(null);
   };
 
   // Parse file when uploaded
@@ -641,8 +658,9 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
                   label="Upload Ponsheet"
                   helper="Choose your Ponsheet .xlsx workbook"
                   accept=".xlsx"
-                  onFileSelect={setFile}
-                  onClear={() => setFile(null)}
+                  selectedName={file?.name ?? null}
+                  onFileSelect={handlePonsheetSelect}
+                  onClear={handlePonsheetClear}
                 />
                 <FileUpload
                   label="Upload data file (optional)"

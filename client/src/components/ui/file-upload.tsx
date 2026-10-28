@@ -18,6 +18,11 @@ interface FileUploadProps {
     description?: string;
     accept: Record<string, string[]>;
   }>;
+  /**
+   * Name of a file supplied from outside the tile (e.g. a Ponsheet uploaded on
+   * the other page). When set, it overrides the internally tracked selection.
+   */
+  selectedName?: string | null;
 }
 
 export function FileUpload({
@@ -28,9 +33,11 @@ export function FileUpload({
   label = "Upload Excel Sheet",
   helper = "Drag and drop your .xlsx file here, or click to browse",
   pickerTypes,
+  selectedName,
 }: FileUploadProps) {
   const [dragActive, setDragActive] = useState(false);
-  const [fileName, setFileName] = useState<string | null>(null);
+  const [pickedName, setPickedName] = useState<string | null>(null);
+  const fileName = selectedName !== undefined ? selectedName : pickedName;
   const inputRef = useRef<HTMLInputElement>(null);
 
   const handleDrag = (e: React.DragEvent) => {
@@ -99,13 +106,13 @@ export function FileUpload({
   };
 
   const emit = (file: File, handle: FileSystemFileHandle | null) => {
-    setFileName(file.name);
+    setPickedName(file.name);
     onFileSelect(file, handle);
   };
 
   const clearFile = (e: React.MouseEvent) => {
     e.stopPropagation();
-    setFileName(null);
+    setPickedName(null);
     onClear?.();
     if (inputRef.current) {
       inputRef.current.value = '';
