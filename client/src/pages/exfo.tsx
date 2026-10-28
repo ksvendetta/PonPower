@@ -30,8 +30,12 @@ import {
   drawConnections, clearConnections, flashPonOnMap, buildOpenInNewTabUrl,
 } from '@/lib/exfo-maps';
 
+// Tech UID this tool is normally run under; overridden by whatever the tech
+// last typed, which is restored from localStorage on mount.
+const DEFAULT_TECH_UID = 'KL131S';
+
 const DEFAULT_CFG: ExfoJobConfig = {
-  name: '', techID: '', domain: '@att.com',
+  name: '', techID: DEFAULT_TECH_UID, domain: '@att.com',
   aloc: '', zloc: '', wcc: '',
   testType: 'iOLM',
   iolmPreset: 'over', iolmCustom: '', iolmCustomExt: '.iolmcfg',
@@ -129,12 +133,24 @@ export default function Exfo({ publicMode = false }: ExfoProps = {}) {
     }
   }, [parsed]);
 
-  // Auto-set wcc from PFP name + ALoc when blank
-  useEffect(() => {
-    if (parsed?.pfpName && !cfg.wcc && cfg.aloc) {
-      setCfg(c => ({ ...c, wcc: cfg.aloc + 'PFP' }));
-    }
-  }, [parsed?.pfpName, cfg.aloc]);
+  // Entering the CLLI (ALoc) fills the other CLLI fields from it: CO CLLI
+  // matches it and PFP CLLI is that CLLI plus PFP, so MILWWI10 gives
+  // MILWWI10PFP. A field the tech filled in themselves is left alone, which is
+  // anything that is neither blank nor what the previous CLLI derived.
+  const handleAlocChange = (value: string) => {
+    setCfg(c => {
+      const prev = c.aloc.trim();
+      const next = value.trim();
+      const ownsZloc = !c.zloc.trim() || c.zloc === prev;
+      const ownsWcc = !c.wcc.trim() || c.wcc === (prev && prev + 'PFP');
+      return {
+        ...c,
+        aloc: value,
+        zloc: ownsZloc ? next : c.zloc,
+        wcc: ownsWcc ? (next && next + 'PFP') : c.wcc,
+      };
+    });
+  };
 
   // Auto-resolve city from CLLI
   useEffect(() => {
@@ -600,7 +616,7 @@ export default function Exfo({ publicMode = false }: ExfoProps = {}) {
               </div>
               <div className="space-y-1.5">
                 <Label>CLLI (ALoc)</Label>
-                <Input value={cfg.aloc} onChange={e => setCfg(c => ({ ...c, aloc: e.target.value }))} placeholder="e.g. MILWWI10" />
+                <Input value={cfg.aloc} onChange={e => handleAlocChange(e.target.value)} placeholder="e.g. MILWWI10" />
               </div>
               <div className="space-y-1.5">
                 <Label>CO CLLI (ZLoc)</Label>
