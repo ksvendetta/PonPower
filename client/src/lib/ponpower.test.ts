@@ -313,3 +313,24 @@ test('Task moves to C and every exported row alternates white/gray after reimpor
     input = new File([bytes], 'reimport.xlsx');
   }
 });
+
+test('every exported package part a relationship or content type names is actually written', async () => {
+  for (const path of ['PONSHEET.xlsx', 'examples/PON_TEST_SHEET__17__stag_Text.xlsx']) {
+    const result = await preparePonPower(await file(path));
+    const zip = unzipSync(await writeExcelWorkbook(result.workbook));
+    const parts = new Set(Object.keys(zip).filter(name => !name.endsWith('/')));
+    // Excel offers to repair the download when a relationship target or a
+    // content-type override points at a part the package never got.
+    for (const name of Object.keys(zip).filter(n => n.endsWith('.rels'))) {
+      const base = name.replace(/_rels\/[^/]+$/, '');
+      for (const [, target] of strFromU8(zip[name]).matchAll(/Target="([^"]+)"(?![^>]*External)/g)) {
+        if (/^https?:/.test(target)) continue;
+        assert.ok(parts.has(decodeURIComponent(new URL(target, `file:///${base}`).pathname.slice(1))), `${name} -> ${target}`);
+      }
+    }
+    for (const [, part] of strFromU8(zip['[Content_Types].xml']).matchAll(/<Override PartName="\/([^"]+)"/g)) {
+      assert.ok(parts.has(part), `content type override -> ${part}`);
+    }
+    assert.ok(zip['xl/theme/theme1.xml']);
+  }
+});

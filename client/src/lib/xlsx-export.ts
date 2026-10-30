@@ -35,9 +35,22 @@ export function normalizeWorkbookCells(workbook: ExcelJS.Workbook) {
   }
 }
 
+/**
+ * ExcelJS always writes the workbook's theme relationship and content-type
+ * override, but only emits xl/theme/theme1.xml when the model carries a theme.
+ * Loading a workbook saved without one leaves themes an empty object, so both
+ * point at a part that never gets written and Excel offers to repair the
+ * download. Clearing it falls back to ExcelJS's own default theme.
+ */
+function useDefaultThemeWhenEmpty(workbook: ExcelJS.Workbook) {
+  const wb = workbook as ExcelJS.Workbook & { _themes?: Record<string, string> };
+  if (wb._themes && !Object.keys(wb._themes).length) wb._themes = undefined;
+}
+
 /** ExcelJS emits editAs on oneCellAnchor, although OOXML permits it only on twoCellAnchor. */
 export async function writeExcelWorkbook(workbook: ExcelJS.Workbook): Promise<Uint8Array> {
   normalizeWorkbookCells(workbook);
+  useDefaultThemeWhenEmpty(workbook);
   const files = unzipSync(new Uint8Array(await workbook.xlsx.writeBuffer()));
   // ExcelJS's default font writes color/family/scheme before size/name. OOXML's
   // font sequence requires size before color, then name/family/charset/scheme.
