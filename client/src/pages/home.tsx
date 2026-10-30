@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type ExcelJS from "exceljs";
 import { FileUpload } from "@/components/ui/file-upload";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -50,7 +51,7 @@ async function tryBuildQrDataUrl(url: string): Promise<string | null> {
   }
 }
 import { AppToggle } from "@/components/app-toggle";
-import { Download, FileJson, Copy, Save, FileSpreadsheet, Settings, MapPin, ExternalLink, Search, Share2, Locate } from "lucide-react";
+import { Download, FileJson, Copy, Save, FileSpreadsheet, Settings, MapPin, ExternalLink, Search, Share2, Locate, Printer } from "lucide-react";
 
 import { preparePonPower, ponSheetFilename, PON_HEADERS, applyPonDistances, type PonPowerResult } from "@/lib/ponpower";
 import { isSharablePonsheet, setSharedPonsheet, useSharedPonsheet } from "@/lib/shared-ponsheet";
@@ -599,6 +600,212 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
     }
   };
 
+  // The exported sheet carries four rows of job header above the column
+  // headers in row 5. Read them back out so the preview shows the same thing
+  // the download does, merges and all.
+  const SHEET_HEADER_ROWS = 4;
+
+  // Mirrors what ponpower.ts writes into the workbook, so the preview and the
+  // printout carry the same colours and type as the sheet Excel opens.
+  const SHEET_FONT = 'Calibri, Carlito, "Segoe UI", sans-serif';
+  const SHEET_GRID = '#d4d4d4';
+  const SHEET_HEADER_FILL = '#D9E1F2';
+  const SHEET_STATUS_FILLS: Record<string, string> = { O: '#FCE4D6', C: '#C6E0B4' };
+  const SHEET_BORDER_WIDTHS: Record<string, string> = { hair: '1px', thin: '1px', medium: '2px', thick: '3px', double: '3px' };
+  const SHEET_BORDER_RANK: Record<string, number> = { hair: 1, dotted: 1, dashed: 1, thin: 2, medium: 3, mediumDashed: 3, double: 3, thick: 4 };
+
+  // Excel draws one line per grid line and lets the heavier of the two
+  // neighbouring borders win, so the header's medium blue underline beats the
+  // thin gray top of the row below it.
+  const strongerBorder = (a?: Partial<ExcelJS.Border>, b?: Partial<ExcelJS.Border>) => {
+    const rank = (edge?: Partial<ExcelJS.Border>) => (edge?.style ? SHEET_BORDER_RANK[edge.style] ?? 2 : 0);
+    if (!rank(a) && !rank(b)) return undefined;
+    return rank(a) >= rank(b) ? a : b;
+  };
+
+  // Borders live in the uploaded template, not in our export code: the header
+  // row carries a medium blue underline, the table a thin gray grid, and the
+  // job header rows none at all. Only the top and left edges are drawn (plus
+  // the closing edges of the sheet) so that no grid line is painted twice and
+  // none can be covered by the next row's fill.
+  const sheetCellBorders = (row: number, column: number, fallback: string) => {
+    const sheet = parsedWorkbook?.workbook.getWorksheet(parsedWorkbook.sheetName);
+    const borderAt = (r: number, c: number) => (r >= 1 && c >= 1 ? sheet?.getCell(r, c).border : undefined);
+    const own = borderAt(row, column);
+    const css = (edge?: Partial<ExcelJS.Border>) =>
+      edge?.style
+        ? `${SHEET_BORDER_WIDTHS[edge.style] ?? '1px'} solid #${(edge.color?.argb ?? 'FF000000').slice(-6)}`
+        : fallback;
+    const lastRow = (staggeredTerminals.at(-1)?.rowIndex ?? 0) + 1;
+    return {
+      borderTop: css(strongerBorder(own?.top, borderAt(row - 1, column)?.bottom)),
+      borderLeft: css(strongerBorder(own?.left, borderAt(row, column - 1)?.right)),
+      borderBottom: row === lastRow ? css(own?.bottom) : 'none',
+      borderRight: column === PON_HEADERS.length ? css(own?.right) : 'none',
+    };
+  };
+
+  const sheetBorderCss = (row: number, column: number, fallback: string) => {
+    const borders = sheetCellBorders(row, column, fallback);
+    return `border-top:${borders.borderTop};border-right:${borders.borderRight};border-bottom:${borders.borderBottom};border-left:${borders.borderLeft}`;
+  };
+
+  // A sheet that was downloaded from here already carries the QR as an
+  // embedded image; show that when this session has not minted a fresh one.
+  const embeddedQrDataUrl = useMemo(() => {
+    const sheet = parsedWorkbook?.workbook.getWorksheet(parsedWorkbook.sheetName);
+    const placed = sheet?.getImages().find(image => image.range.tl.col >= 11 && image.range.tl.row < 3);
+    if (!placed) return null;
+    const media = parsedWorkbook!.workbook.getImage(Number(placed.imageId)) as
+      { buffer?: ArrayBuffer | Uint8Array; base64?: string; extension?: string };
+    if (media?.base64) return media.base64.startsWith('data:') ? media.base64 : `data:image/${media.extension ?? 'png'};base64,${media.base64}`;
+    if (!media?.buffer) return null;
+    const bytes = media.buffer instanceof Uint8Array ? media.buffer : new Uint8Array(media.buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    return `data:image/${media.extension ?? 'png'};base64,${btoa(binary)}`;
+  }, [parsedWorkbook]);
+
+  const previewQrDataUrl = shareQrDataUrl ?? embeddedQrDataUrl;
+
+  type SheetHeaderCell = { key: string; column: number; text: string; colSpan: number; rowSpan: number; qr?: boolean };
+
+  const sheetHeaderRows = useMemo<SheetHeaderCell[][]>(() => {
+    const sheet = parsedWorkbook?.workbook.getWorksheet(parsedWorkbook.sheetName);
+    if (!sheet) return [];
+    const rows: SheetHeaderCell[][] = [];
+    for (let row = 1; row <= SHEET_HEADER_ROWS; row++) {
+      const cells: SheetHeaderCell[] = [];
+      for (let column = 1; column <= PON_HEADERS.length; column++) {
+        const cell = sheet.getCell(row, column);
+        const master = cell.master;
+        // Skip the cells a merge above or to the left already covers.
+        // ExcelJS types row/col as string here; both are numbers at runtime.
+        if (Number(master.row) !== row || Number(master.col) !== column) continue;
+        let colSpan = 1;
+        while (column + colSpan <= PON_HEADERS.length && sheet.getCell(row, column + colSpan).master === master) colSpan++;
+        let rowSpan = 1;
+        while (row + rowSpan <= SHEET_HEADER_ROWS && sheet.getCell(row + rowSpan, column).master === master) rowSpan++;
+        cells.push({ key: cell.address, column, text: cell.text ?? '', colSpan, rowSpan });
+      }
+      rows.push(cells);
+    }
+    // The QR is anchored over L1:M1 and only exists once a share link has been
+    // built; mirror it here rather than leaving the corner blank.
+    if (previewQrDataUrl && rows.length >= 2) {
+      const QR_COLUMN = 12;
+      const overlay = (row: SheetHeaderCell[], cell: SheetHeaderCell) =>
+        [...row.filter(c => c.column < QR_COLUMN), cell];
+      rows[0] = overlay(rows[0], { key: 'qr-label', column: QR_COLUMN, text: 'Scan QR for Map', colSpan: 2, rowSpan: 1 });
+      rows[1] = overlay(rows[1], { key: 'qr-image', column: QR_COLUMN, text: '', colSpan: 2, rowSpan: 1, qr: true });
+    }
+    return rows;
+  }, [parsedWorkbook, previewQrDataUrl]);
+
+  // Shared by the preview table and the printout so the two never drift.
+  const previewCellText = (terminal: { rowIndex: number }, column: number) => {
+    if (column === 8 && distanceReview.suppressedRows.has(terminal.rowIndex + 1)) return '';
+    if (column === 8 && footageByRowIndex.has(terminal.rowIndex)) return Math.round(footageByRowIndex.get(terminal.rowIndex)!).toLocaleString();
+    return parsedWorkbook?.workbook.getWorksheet(parsedWorkbook.sheetName)?.getCell(terminal.rowIndex + 1, column + 1).text ?? '';
+  };
+
+  // The export alternates white/gray by sheet row, and the Status conditional
+  // format paints over both.
+  const previewRowFill = (terminal: { rowIndex: number }) => {
+    const status = previewCellText(terminal, PON_HEADERS.length - 1).trim().toUpperCase();
+    return SHEET_STATUS_FILLS[status] ?? ((terminal.rowIndex + 1) % 2 === 0 ? '#FFFFFF' : '#F2F2F2');
+  };
+
+  const handlePrintPreview = () => {
+    if (staggeredTerminals.length === 0) return;
+    const escapeHtml = (value: string) => value.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]!));
+    const title = parsedWorkbook?.project ? `${parsedWorkbook.project} PonSheet` : 'PonSheet';
+    // Excel prints only real cell borders, not the on-screen gridlines, so the
+    // printout takes each cell's own border and nothing else.
+    const head = PON_HEADERS.map((header, i) =>
+      `<th style="${sheetBorderCss(SHEET_HEADER_ROWS + 1, i + 1, 'none')}">${escapeHtml(header)}</th>`).join('');
+    // Carry the job header rows into the printout too, so the page matches the
+    // preview and the downloaded sheet.
+    const sheetHeader = sheetHeaderRows
+      .map((cells, rowIndex) => `<tr>${cells
+        .map(cell => cell.qr && previewQrDataUrl
+          ? `<td colspan="${cell.colSpan}" rowspan="${cell.rowSpan}" class="qr"><img src="${previewQrDataUrl}"></td>`
+          // Row 1 only carries the QR caption; the job rows below it are set
+          // larger so they fill the band above the table.
+          : `<td colspan="${cell.colSpan}" rowspan="${cell.rowSpan}" class="job${rowIndex > 0 ? ' lead' : ''}" style="${sheetBorderCss(rowIndex + 1, cell.column, 'none')}">${escapeHtml(cell.text)}</td>`)
+        .join('')}</tr>`)
+      .join('');
+    const rows = staggeredTerminals.map(t => `<tr>${PON_HEADERS.map((_, i) =>
+      `<td style="background:${previewRowFill(t)};${sheetBorderCss(t.rowIndex + 1, i + 1, 'none')}">${escapeHtml(String(previewCellText(t, i)))}</td>`).join('')}</tr>`);
+
+    const styles = `
+      /* Mirrors the workbook's own pageSetup: landscape, fit to one page wide,
+         rows 1-5 repeated at the top of every page. The page margin is zero so
+         the browser has nowhere to draw its filename/URL/date band; each page
+         section carries its own gutters instead. */
+      @page { size: landscape; margin: 0; }
+      * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      body { font: 9pt/1.25 ${SHEET_FONT}; margin: 0; color: #000; }
+      .page { padding: 9mm; box-sizing: border-box; page-break-after: always; }
+      .page:last-of-type { page-break-after: auto; }
+      .pagenum { text-align: center; font-size: 8pt; padding-top: 4mm; }
+      table { border-collapse: separate; border-spacing: 0; width: 100%; table-layout: auto; }
+      thead { display: table-header-group; }
+      tr { page-break-inside: avoid; }
+      th, td { padding: 1px 4px; text-align: center; white-space: nowrap; }
+      th { font-weight: bold; background: ${SHEET_HEADER_FILL}; }
+      td.job { font-weight: bold; background: #fff; }
+      td.job.lead { font-size: 13pt; padding: 3px 4px; }
+      td.qr { background: #fff; }
+      td.qr img { width: 72px; height: 72px; }`;
+
+    const pageSection = (pageRows: string[], page: number, pages: number) => `<section class="page">
+      <table><thead>${sheetHeader}<tr>${head}</tr></thead><tbody>${pageRows.join('')}</tbody></table>
+      <div class="pagenum">Page ${page} of ${pages}</div>
+    </section>`;
+
+    const document_ = (content: string) =>
+      `<!doctype html><html><head><meta charset="utf-8"><title></title><style>${styles}</style></head><body>${content}</body></html>`;
+
+    // Printing an off-screen iframe keeps the app's own layout out of the
+    // printout and avoids the popup blocker a new window would hit.
+    const frame = document.createElement('iframe');
+    frame.setAttribute('aria-hidden', 'true');
+    frame.style.cssText = 'position:fixed;right:0;bottom:0;width:1100px;height:850px;border:0;visibility:hidden';
+    document.body.appendChild(frame);
+    const doc = frame.contentDocument!;
+    const write = (html: string) => { doc.open(); doc.write(html); doc.close(); };
+
+    // Chrome has no CSS page counter, so the rows are split into pages here and
+    // each page is numbered. Measure one laid-out page first to learn how many
+    // rows fit under the repeated header.
+    write(document_(`${pageSection(rows.slice(0, Math.min(rows.length, 12)), 1, 1)}<div id="probe" style="height:8.5in"></div>`));
+    const section = doc.querySelector('section')!;
+    const sampleRow = section.querySelector('tbody tr');
+    const padding = parseFloat(doc.defaultView!.getComputedStyle(section).paddingTop) || 0;
+    const pageHeight = doc.getElementById('probe')!.getBoundingClientRect().height;
+    const rowHeight = sampleRow?.getBoundingClientRect().height || 16;
+    const fixedHeight = (section.querySelector('thead')?.getBoundingClientRect().height ?? 0)
+      + (section.querySelector('.pagenum')?.getBoundingClientRect().height ?? 0);
+    // The 0.96 keeps a page from spilling onto the next one on shorter paper,
+    // which would throw the numbering out.
+    const usable = (pageHeight - 2 * padding) * 0.96 - fixedHeight;
+    const perPage = Math.max(5, Math.floor(usable / rowHeight));
+    const pageCount = Math.max(1, Math.ceil(rows.length / perPage));
+
+    const pages: string[] = [];
+    for (let page = 0; page < pageCount; page++) {
+      pages.push(pageSection(rows.slice(page * perPage, (page + 1) * perPage), page + 1, pageCount));
+    }
+    write(document_(pages.join('')));
+    doc.close();
+    const cleanUp = () => frame.remove();
+    frame.contentWindow!.addEventListener('afterprint', cleanUp, { once: true });
+    frame.contentWindow!.focus();
+    frame.contentWindow!.print();
+    setTimeout(cleanUp, 60000);
+  };
+
   return (
     <div className="min-h-screen bg-background p-6 md:p-12 font-sans text-foreground">
       <div className="max-w-6xl mx-auto space-y-8">
@@ -835,37 +1042,100 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
                   Compact PON test sheet with staggered ports and strands, task lookups, and status lookups.
                 </CardDescription>
               </div>
-              <Button
-                onClick={handleDownloadConverted}
-                size="sm"
-                className="h-8 text-xs gap-1.5"
-                disabled={staggeredTerminals.length === 0}
-              >
-                <FileSpreadsheet className="w-3.5 h-3.5" /> Download XLSX
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  onClick={handlePrintPreview}
+                  size="sm"
+                  variant="outline"
+                  className="h-8 text-xs gap-1.5"
+                  disabled={staggeredTerminals.length === 0}
+                >
+                  <Printer className="w-3.5 h-3.5" /> Print
+                </Button>
+                <Button
+                  onClick={handleDownloadConverted}
+                  size="sm"
+                  className="h-8 text-xs gap-1.5"
+                  disabled={staggeredTerminals.length === 0}
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5" /> Download XLSX
+                </Button>
+              </div>
             </div>
           </CardHeader>
           <CardContent className="p-0">
             {staggeredTerminals.length > 0 ? (
-              <div className="max-h-[500px] overflow-auto">
-                <Table className="font-mono text-xs">
-                  <TableHeader className="sticky top-0 bg-secondary/40 backdrop-blur-sm z-10">
-                    <TableRow>
-                      {PON_HEADERS.map(header => <TableHead key={header} className="whitespace-nowrap">{header}</TableHead>)}
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {staggeredTerminals.map((t, rowNumber) => (
-                      <TableRow key={t.rowIndex} className={rowNumber % 2 === 1 ? 'bg-muted/30' : ''}>
-                        {PON_HEADERS.map((header, i) => (
-                          <TableCell key={header} className="whitespace-nowrap">
-                            {i === 8 && distanceReview.suppressedRows.has(t.rowIndex + 1) ? '' : i === 8 && footageByRowIndex.has(t.rowIndex) ? Math.round(footageByRowIndex.get(t.rowIndex)!).toLocaleString() : parsedWorkbook?.workbook.getWorksheet(parsedWorkbook.sheetName)?.getCell(t.rowIndex + 1, i + 1).text}
-                          </TableCell>
+              <div className="max-h-[560px] overflow-auto bg-white">
+                <table
+                  className="border-separate border-spacing-0 text-[12px] text-black"
+                  style={{ fontFamily: SHEET_FONT }}
+                >
+                  <thead className="sticky top-0 z-20">
+                    {/* Excel's column letters */}
+                    <tr>
+                      <th className="sticky left-0 z-30 bg-[#f5f5f5] text-[#555] font-normal text-center px-1" style={{ border: `1px solid ${SHEET_GRID}`, minWidth: 34 }} />
+                      {PON_HEADERS.map((_, i) => (
+                        <th key={`letter-${i}`} className="bg-[#f5f5f5] text-[#555] font-normal text-center px-2" style={{ border: `1px solid ${SHEET_GRID}` }}>
+                          {String.fromCharCode(65 + i)}
+                        </th>
+                      ))}
+                    </tr>
+                    {/* Rows 1-4: the job header the export writes above the table */}
+                    {sheetHeaderRows.map((cells, row) => (
+                      <tr key={`sheet-header-${row}`}>
+                        <th className="sticky left-0 z-30 bg-[#f5f5f5] text-[#555] font-normal text-center px-1" style={{ border: `1px solid ${SHEET_GRID}` }}>
+                          {row + 1}
+                        </th>
+                        {cells.map(cell => (
+                          <td
+                            key={cell.key}
+                            colSpan={cell.colSpan}
+                            rowSpan={cell.rowSpan}
+                            className="bg-white text-center font-bold align-middle whitespace-nowrap px-2 py-1"
+                            style={sheetCellBorders(row + 1, cell.column, `1px solid ${SHEET_GRID}`)}
+                          >
+                            {cell.qr && previewQrDataUrl
+                              ? <img src={previewQrDataUrl} alt="Scan QR for Map" className="w-[72px] h-[72px] mx-auto" />
+                              : cell.text}
+                          </td>
                         ))}
-                      </TableRow>
+                      </tr>
                     ))}
-                  </TableBody>
-                </Table>
+                    {/* Row 5: the column headers, frozen like the exported sheet */}
+                    <tr>
+                      <th className="sticky left-0 z-30 bg-[#f5f5f5] text-[#555] font-normal text-center px-1" style={{ border: `1px solid ${SHEET_GRID}` }}>
+                        {SHEET_HEADER_ROWS + 1}
+                      </th>
+                      {PON_HEADERS.map(header => (
+                        <th
+                          key={header}
+                          className="text-center font-bold whitespace-nowrap px-2 py-1"
+                          style={{ ...sheetCellBorders(SHEET_HEADER_ROWS + 1, PON_HEADERS.indexOf(header) + 1, `1px solid ${SHEET_GRID}`), background: SHEET_HEADER_FILL }}
+                        >
+                          {header}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {staggeredTerminals.map(t => (
+                      <tr key={t.rowIndex}>
+                        <th className="sticky left-0 z-0 bg-[#f5f5f5] text-[#555] font-normal text-center px-1" style={{ border: `1px solid ${SHEET_GRID}` }}>
+                          {t.rowIndex + 1}
+                        </th>
+                        {PON_HEADERS.map((header, i) => (
+                          <td
+                            key={header}
+                            className="text-center whitespace-nowrap px-2"
+                            style={{ ...sheetCellBorders(t.rowIndex + 1, i + 1, `1px solid ${SHEET_GRID}`), background: previewRowFill(t) }}
+                          >
+                            {previewCellText(t, i)}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             ) : (
               <div className="flex flex-col items-center justify-center text-muted-foreground py-16 opacity-50">
