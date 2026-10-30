@@ -22,9 +22,9 @@ const PUB_PATHS: Record<AppKey, string> = {
 };
 
 const LABELS: Record<AppKey, string> = {
-  ponpower: "PonPower",
+  ponpower: "PonSheet",
   iolm: "IOLM",
-  exfo: "F2 Exfo",
+  exfo: "Exfo Exchange",
 };
 
 const DEFAULT_KEYS: AppKey[] = ["ponpower", "iolm", "exfo"];

@@ -683,7 +683,7 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
                 </p>}
                 {!!parsedWorkbook?.duplicateGroups.length && <div className="space-y-3 rounded border border-amber-500/50 p-3">
                   <p className="text-sm font-semibold">Duplicate PON counts — choose which terminal to keep</p>
-                  <p className="text-xs text-muted-foreground">Like F2 Exfo, the first entry is kept by default. Waldo conflicts choose a terminal; Fiber ID conflicts choose the duplicate strands to keep. Unique strands remain available.</p>
+                  <p className="text-xs text-muted-foreground">Like Exfo Exchange, the first entry is kept by default. Waldo conflicts choose a terminal; Fiber ID conflicts choose the duplicate strands to keep. Unique strands remain available.</p>
                   {parsedWorkbook.duplicateGroups.map(group => <div key={group.key} className="space-y-2 border-t pt-2">
                     <p className="text-xs">{group.kind === 'waldo' ? `Waldo ID: ${group.cableId}` : `Fiber ID (grouped by terminal): ${group.counts.join(', ')}`}</p>
                     {group.items.map(t => <label key={t.rowIndex} className="flex gap-2 items-center text-xs cursor-pointer">
