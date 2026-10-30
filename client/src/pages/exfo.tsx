@@ -556,9 +556,11 @@ export default function Exfo({ publicMode = false }: ExfoProps = {}) {
                 ? 'border-red-500/40 text-red-400 bg-red-500/10'
                 : 'border-yellow-500/40 text-yellow-400 bg-yellow-500/10')
             }>{stateBadge.text}</span>
-            <Button variant="outline" size="sm" onClick={() => setShowSettings(true)} className="gap-2">
-              <Settings className="w-4 h-4" /> Settings
-            </Button>
+            {!publicMode && (
+              <Button variant="outline" size="sm" onClick={() => setShowSettings(true)} className="gap-2">
+                <Settings className="w-4 h-4" /> Settings
+              </Button>
+            )}
           </div>
         </div>
 
@@ -580,7 +582,7 @@ export default function Exfo({ publicMode = false }: ExfoProps = {}) {
                   onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
                 />
                 <span className="inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground hover:bg-primary/90 h-9 px-4 py-2">
-                  Choose File
+                  Upload PonSheet
                 </span>
               </label>
               <span className="text-sm text-muted-foreground truncate flex-1 min-w-0">{fileName}</span>

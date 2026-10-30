@@ -626,9 +626,11 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
             <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
             SYSTEM ONLINE
           </div>
-          <Button variant="outline" size="sm" onClick={() => setShowSettings(true)} className="gap-2">
-            <Settings className="w-4 h-4" /> Settings
-          </Button>
+          {!publicMode && (
+            <Button variant="outline" size="sm" onClick={() => setShowSettings(true)} className="gap-2">
+              <Settings className="w-4 h-4" /> Settings
+            </Button>
+          )}
           {deferredPrompt && (
             <Button onClick={handleInstall} size="sm" className="gap-2 bg-primary text-primary-foreground hover:bg-primary/90">
               <Download className="w-4 h-4" />
