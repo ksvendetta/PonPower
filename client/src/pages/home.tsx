@@ -554,6 +554,21 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
     }
   };
 
+  // Mint the share link, and with it the QR, as soon as an uploaded sheet has a
+  // map behind it. Downloading used to be the first thing that created one, so
+  // the preview had nothing to show unless the uploaded file already carried a
+  // QR of its own. Once per parsed upload: ensureShareUrl reuses an existing
+  // link, and the ref keeps a cleared link (a distance edit) from re-minting.
+  const autoSharedFor = useRef<ExfoXlsxParse | null>(null);
+
+  useEffect(() => {
+    if (!parsedExfo || !mapLoaded || !apiKey.trim()) return;
+    if (autoSharedFor.current === parsedExfo) return;
+    autoSharedFor.current = parsedExfo;
+    void ensureShareUrl();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [parsedExfo, mapLoaded, apiKey]);
+
   const handleDownloadConverted = async () => {
     if (!parsedWorkbook || staggeredTerminals.length === 0) return;
     try {
@@ -757,7 +772,7 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
       td.job { font-weight: bold; background: #fff; }
       td.job.lead { font-size: 13pt; padding: 3px 4px; }
       td.qr { background: #fff; }
-      td.qr img { width: 72px; height: 72px; }`;
+      td.qr img { width: 84px; height: 84px; }`;
 
     const pageSection = (pageRows: string[], page: number, pages: number) => `<section class="page">
       <table><thead>${sheetHeader}<tr>${head}</tr></thead><tbody>${pageRows.join('')}</tbody></table>
@@ -1095,7 +1110,7 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
                             style={sheetCellBorders(row + 1, cell.column, `1px solid ${SHEET_GRID}`)}
                           >
                             {cell.qr && previewQrDataUrl
-                              ? <img src={previewQrDataUrl} alt="Scan QR for Map" className="w-[72px] h-[72px] mx-auto" />
+                              ? <img src={previewQrDataUrl} alt="Scan QR for Map" className="w-[84px] h-[84px] mx-auto" />
                               : cell.text}
                           </td>
                         ))}
