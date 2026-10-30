@@ -31,7 +31,8 @@ import {
 } from '@/lib/exfo-maps';
 
 // Tech UID this tool is normally run under; overridden by whatever the tech
-// last typed, which is restored from localStorage on mount.
+// last typed, which is restored from localStorage on mount. The public site
+// gets neither: it starts blank and never touches the stored UID.
 const DEFAULT_TECH_UID = 'KL131S';
 
 const DEFAULT_CFG: ExfoJobConfig = {
@@ -70,7 +71,9 @@ export default function Exfo({ publicMode = false }: ExfoProps = {}) {
   const [fileName, setFileName] = useState('No file chosen.');
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const sharedPonsheet = useSharedPonsheet();
-  const [cfg, setCfg] = useState<ExfoJobConfig>(DEFAULT_CFG);
+  const [cfg, setCfg] = useState<ExfoJobConfig>(
+    publicMode ? { ...DEFAULT_CFG, techID: '' } : DEFAULT_CFG,
+  );
   const [excludedTerminals, setExcludedTerminals] = useState<Set<number>>(new Set());
   const [excludedCands, setExcludedCands] = useState<Set<string>>(new Set());
 
@@ -110,10 +113,12 @@ export default function Exfo({ publicMode = false }: ExfoProps = {}) {
       }
       if (v) setApiKey(v);
     } catch (_) {}
-    try {
-      const t = localStorage.getItem(TECH_UID_STORAGE);
-      if (t) setCfg(c => ({ ...c, techID: t }));
-    } catch (_) {}
+    if (!publicMode) {
+      try {
+        const t = localStorage.getItem(TECH_UID_STORAGE);
+        if (t) setCfg(c => ({ ...c, techID: t }));
+      } catch (_) {}
+    }
     geocodeCacheRef.current = loadGeocodeCache();
     setSettingsLoaded(true);
   }, []);
@@ -123,6 +128,7 @@ export default function Exfo({ publicMode = false }: ExfoProps = {}) {
   }, [apiKey]);
 
   useEffect(() => {
+    if (publicMode) return;
     try { localStorage.setItem(TECH_UID_STORAGE, cfg.techID.trim()); } catch (_) {}
   }, [cfg.techID]);
 
