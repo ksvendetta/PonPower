@@ -1,4 +1,4 @@
-const CACHE_NAME = 'fiber-gen-v4';
+const CACHE_NAME = 'fiber-gen-v5';
 const BASE = self.registration.scope;
 const STATIC_ASSETS = [
   BASE,
@@ -38,6 +38,13 @@ self.addEventListener('fetch', (event) => {
   const isNavigation =
     req.mode === 'navigate' ||
     (req.method === 'GET' && req.headers.get('accept')?.includes('text/html'));
+
+  // Share and map listings change as maps are created. A cached copy would
+  // keep showing maps that are no longer the active set.
+  if (req.url.includes('/api/')) {
+    event.respondWith(fetch(req));
+    return;
+  }
 
   if (isNavigation) {
     event.respondWith(

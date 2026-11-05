@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
+import { projectFromSharePayload, toCreatedAtIso, type ActiveMap } from "../shared/active-maps";
 import { storage } from "./storage";
 
 // In-memory mirror of the Vercel /api/share function for local dev.
@@ -58,6 +59,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return;
     }
     res.status(200).json({ k: rec.k, d: rec.d });
+  });
+
+  app.get('/api/maps', (_req: Request, res: Response) => {
+    const maps: ActiveMap[] = [];
+    SHARE_STORE.forEach((rec, id) => {
+      maps.push({
+        id,
+        project: projectFromSharePayload(rec.d),
+        createdAt: toCreatedAtIso(rec.createdAt),
+      });
+    });
+    maps.sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
+    res.status(200).json({ maps });
   });
 
   const httpServer = createServer(app);

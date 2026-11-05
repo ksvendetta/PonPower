@@ -50,6 +50,7 @@ async function tryBuildQrDataUrl(url: string): Promise<string | null> {
     return null;
   }
 }
+import { ActiveMapsButton } from "@/components/active-maps";
 import { AppToggle } from "@/components/app-toggle";
 import { Download, FileJson, Copy, Save, FileSpreadsheet, Settings, MapPin, ExternalLink, Search, Share2, Locate, Printer } from "lucide-react";
 
@@ -835,7 +836,7 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
         </div>
 
         {/* Header */}
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-border pb-6">
+        <div className="flex flex-col md:flex-row md:flex-wrap justify-between items-start md:items-center gap-4 border-b border-border pb-6">
           <div>
             <h1 className="text-3xl md:text-4xl font-bold tracking-tight bg-gradient-to-r from-primary to-blue-400 bg-clip-text text-transparent">
               FiberOptic Report Gen
@@ -848,17 +849,20 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
             <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
             SYSTEM ONLINE
           </div>
-          {!publicMode && (
-            <Button variant="outline" size="sm" onClick={() => setShowSettings(true)} className="gap-2">
-              <Settings className="w-4 h-4" /> Settings
-            </Button>
-          )}
-          {deferredPrompt && (
-            <Button onClick={handleInstall} size="sm" className="gap-2 bg-primary text-primary-foreground hover:bg-primary/90">
-              <Download className="w-4 h-4" />
-              Install App
-            </Button>
-          )}
+          <div className="flex items-center gap-2">
+            {!publicMode && <ActiveMapsButton />}
+            {!publicMode && (
+              <Button variant="outline" size="sm" onClick={() => setShowSettings(true)} className="gap-2">
+                <Settings className="w-4 h-4" /> Settings
+              </Button>
+            )}
+            {deferredPrompt && (
+              <Button onClick={handleInstall} size="sm" className="gap-2 bg-primary text-primary-foreground hover:bg-primary/90">
+                <Download className="w-4 h-4" />
+                Install App
+              </Button>
+            )}
+          </div>
         </div>
 
         <div className={publicMode ? "max-w-2xl mx-auto" : "grid grid-cols-1 lg:grid-cols-12 gap-8"}>
