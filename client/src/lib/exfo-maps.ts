@@ -214,7 +214,7 @@ export interface RenderMapResult {
 
 export async function renderEmbeddedMap(
   canvas: HTMLDivElement,
-  state: { gmap: any | null; gmarkers: any[]; connections: any[]; showConnections: boolean },
+  state: { gmap: any | null; gmarkers: any[]; connections: any[]; showConnections: boolean; terminalBounds?: any },
   opts: RenderMapOptions
 ): Promise<RenderMapResult> {
   const { apiKey, city, pfpName, terminals, cache, portByRow, onStatus } = opts;
@@ -321,6 +321,7 @@ export async function renderEmbeddedMap(
     }
   }
 
+  state.terminalBounds = bounds;
   if (state.gmarkers.length) state.gmap.fitBounds(bounds, 40);
   const elapsedSec = (performance.now() - t0) / 1000;
   return { pfpLocation, distances, resolved, failed, elapsedSec, locations: terminalLocations };

@@ -102,7 +102,7 @@
     document.head.appendChild(s);
   }
 
-  var PFP = null, TERMS = [], SHOW_CONN = false, TITLE = '';
+  var PFP = null, TERMS = [], SHOW_CONN = false, TITLE = '', TERM_BOUNDS = null;
 
   if (shareId) {
     if (!/^[A-Za-z0-9]{4,32}$/.test(shareId)) {
@@ -185,15 +185,27 @@
       if(s){s.textContent=(err&&err.message)||'Could not read GPS location.';s.style.color='#b71c1c';}
     },{enableHighAccuracy:true,maximumAge:5000,timeout:20000});
   }
-  function wireLocateControl(){
+  function goToPfp(){
+    if(TERM_BOUNDS&&!TERM_BOUNDS.isEmpty()){MAP.fitBounds(TERM_BOUNDS,40);return;}
+    if(PFP)MAP.panTo({lat:PFP.lat,lng:PFP.lng});
+  }
+  function mapControlButton(label, title, svg){
     var btn=document.createElement('button');
     btn.type='button';
-    btn.title='My location';
-    btn.setAttribute('aria-label','Move map to my location');
-    btn.style.cssText='margin:0 10px 10px 0;width:40px;height:40px;padding:0;border:0;border-radius:2px;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.3);cursor:pointer;display:flex;align-items:center;justify-content:center;';
-    btn.innerHTML='<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1a73e8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/></svg>';
-    btn.addEventListener('click',goToMyLocation);
-    MAP.controls[google.maps.ControlPosition.RIGHT_BOTTOM].push(btn);
+    btn.title=title;
+    btn.setAttribute('aria-label',label);
+    btn.style.cssText='margin:0 10px 8px 0;width:40px;height:40px;padding:0;border:0;border-radius:2px;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.3);cursor:pointer;display:flex;align-items:center;justify-content:center;';
+    btn.innerHTML=svg;
+    return btn;
+  }
+  function wireLocateControl(){
+    var locate=mapControlButton('Move map to my location','My location','<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1a73e8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/></svg>');
+    locate.addEventListener('click',goToMyLocation);
+    var pfp=mapControlButton('Back to PFP','Back to PFP','<svg xmlns="http://www.w3.org/2000/svg" width="32" height="20" viewBox="0 0 32 20" aria-hidden="true"><rect x="1" y="1" width="30" height="18" rx="5" fill="#d32f2f" stroke="#7a0000"/><text x="16" y="14" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" font-weight="700" fill="#fff">PFP</text></svg>');
+    pfp.addEventListener('click',goToPfp);
+    var slot=MAP.controls[google.maps.ControlPosition.RIGHT_BOTTOM];
+    slot.push(locate);
+    slot.push(pfp);
   }
   function wireLocToggle(){
     var t=document.getElementById('locToggle');
@@ -220,7 +232,7 @@
     if(PFP){var pm=new google.maps.Marker({map:MAP,position:{lat:PFP.lat,lng:PFP.lng},icon:pfpIcon(),title:PFP.name+'\n'+PFP.addr,zIndex:999999});bounds.extend(pm.getPosition());var pinfo=new google.maps.InfoWindow({content:'<b>PFP (starting point)</b><br>'+PFP.name+'<br>'+PFP.addr});pm.addListener('click',function(){pinfo.open({anchor:pm,map:MAP});});}
     var TERM_MARKERS=[];
     for(var i=0;i<TERMS.length;i++){(function(t){var m=new google.maps.Marker({map:MAP,position:{lat:t.lat,lng:t.lng},icon:terminalIcon(t.strands,t.port),title:t.name});m._strandNums=Array.isArray(t.strandNums)?t.strandNums:[];TERM_MARKERS.push(m);bounds.extend(m.getPosition());var info=new google.maps.InfoWindow({content:'<b>'+t.name+'</b><br>'+t.addr+'<br>Strands: '+t.strands+(t.port!=null?'<br>Test Port: '+t.port:'')+(t.waldo?'<br>Waldo: '+t.waldo:'')+(t.dist?'<br>Distance from PFP: '+t.dist:'')});m.addListener('click',function(){info.open({anchor:m,map:MAP});});})(TERMS[i]);}
-    if(!bounds.isEmpty())MAP.fitBounds(bounds,40);
+    if(!bounds.isEmpty()){TERM_BOUNDS=bounds;MAP.fitBounds(bounds,40);}
     var tg=document.getElementById('connToggle');tg.addEventListener('change',function(){if(tg.checked)drawLines();else clearLines();});
     if(tg.checked)drawLines();
     var sI=document.getElementById('ponSearch'),sB=document.getElementById('ponSearchBtn'),sS=document.getElementById('ponSearchStatus');

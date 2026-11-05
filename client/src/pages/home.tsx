@@ -106,7 +106,7 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
   const [showMyLocation, setShowMyLocation] = useState(true);
   const mapCanvasRef = useRef<HTMLDivElement>(null);
   const mapStateRef = useRef<{
-    gmap: any | null; gmarkers: any[]; connections: any[]; showConnections: boolean;
+    gmap: any | null; gmarkers: any[]; connections: any[]; showConnections: boolean; terminalBounds?: any;
   }>({ gmap: null, gmarkers: [], connections: [], showConnections: false });
   const userLocStateRef = useRef<UserLocationState>({});
   const geocodeCacheRef = useRef<Map<string, GeocodeHit>>(new Map());
@@ -483,6 +483,21 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
       setMapStatus(msg);
       setMapStatusKind("err");
     });
+  };
+
+  const handleBackToPfp = () => {
+    const gmap = mapStateRef.current.gmap;
+    const bounds = mapStateRef.current.terminalBounds;
+    if (!gmap) {
+      setMapStatus("Load the map first.");
+      setMapStatusKind("err");
+      return;
+    }
+    if (bounds && !bounds.isEmpty()) {
+      gmap.fitBounds(bounds, 40);
+      return;
+    }
+    if (pfpLocation) gmap.panTo({ lat: pfpLocation.lat, lng: pfpLocation.lng });
   };
 
   // Stop GPS watch when the component unmounts or the file changes
@@ -1253,17 +1268,30 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
               <div className="relative">
                 <div ref={mapCanvasRef} style={{ width: "100%", height: 460, borderRadius: 8, background: "hsl(var(--secondary) / 0.4)", display: "none" }} />
                 {mapLoaded && (
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="icon"
-                    className="absolute bottom-3 right-3 z-10 h-10 w-10 shadow-md"
-                    title="Move map to my location"
-                    aria-label="Move map to my location"
-                    onClick={handleGoToMyLocation}
-                  >
-                    <Locate className="w-5 h-5" />
-                  </Button>
+                  <div className="absolute bottom-3 right-3 z-10 flex flex-col gap-2">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="icon"
+                      className="h-10 w-10 shadow-md"
+                      title="Back to PFP"
+                      aria-label="Back to PFP"
+                      onClick={handleBackToPfp}
+                    >
+                      <span className="rounded bg-[#d32f2f] px-1 text-[10px] font-bold leading-none text-white">PFP</span>
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="icon"
+                      className="h-10 w-10 shadow-md"
+                      title="Move map to my location"
+                      aria-label="Move map to my location"
+                      onClick={handleGoToMyLocation}
+                    >
+                      <Locate className="w-5 h-5" />
+                    </Button>
+                  </div>
                 )}
               </div>
               <details>
