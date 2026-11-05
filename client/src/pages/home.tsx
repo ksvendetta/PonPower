@@ -30,7 +30,7 @@ import {
   GeocodeHit, loadGeocodeCache, renderEmbeddedMap, autoResolveCity,
   drawConnections, clearConnections, flashPonOnMap, buildOpenInNewTabUrl,
   buildShareData, buildMapViewerUrl,
-  startUserLocation, stopUserLocation, UserLocationState,
+  startUserLocation, stopUserLocation, panToUserLocation, UserLocationState,
 } from "@/lib/exfo-maps";
 import QRCode from "qrcode";
 import { DistanceReview } from '@/components/distance-review';
@@ -464,6 +464,27 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
     setShowMyLocation(true);
   };
 
+  const handleGoToMyLocation = () => {
+    const gmap = mapStateRef.current.gmap;
+    if (!gmap) {
+      setMapStatus("Load the map first.");
+      setMapStatusKind("err");
+      return;
+    }
+    if (!showMyLocation) {
+      startUserLocation(gmap, userLocStateRef.current, (msg) => {
+        setMapStatus(msg);
+        setMapStatusKind("err");
+        setShowMyLocation(false);
+      });
+      setShowMyLocation(true);
+    }
+    panToUserLocation(gmap, userLocStateRef.current, (msg) => {
+      setMapStatus(msg);
+      setMapStatusKind("err");
+    });
+  };
+
   // Stop GPS watch when the component unmounts or the file changes
   // (the old gmap reference is dropped when a new file is uploaded).
   useEffect(() => {
@@ -477,9 +498,8 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
     }
   }, [file]);
 
-  // Auto-start GPS tracking once the map is up, since "Show my location"
-  // defaults to On. Waits for the map's first idle so the marker isn't
-  // added mid-render; pans to the user so the blue dot is actually visible.
+  // Auto-start the blue dot once the map is up. The camera stays on the
+  // terminals; the locate control is what pans to the user.
   useEffect(() => {
     if (!mapLoaded || !showMyLocation) return;
     const gmap = mapStateRef.current.gmap;
@@ -1230,7 +1250,22 @@ export default function Home({ publicMode = false }: HomeProps = {}) {
               )}
               <DistanceReview outliers={distanceReview.outliers} decisions={distanceReview.decisions} raw={rawDistances}
                 terminals={parsedExfo.terminals} points={mapPoints} pfp={pfpLocation} onDecision={distanceReview.decide} />
-              <div ref={mapCanvasRef} style={{ width: "100%", height: 460, borderRadius: 8, background: "hsl(var(--secondary) / 0.4)", display: "none" }} />
+              <div className="relative">
+                <div ref={mapCanvasRef} style={{ width: "100%", height: 460, borderRadius: 8, background: "hsl(var(--secondary) / 0.4)", display: "none" }} />
+                {mapLoaded && (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="icon"
+                    className="absolute bottom-3 right-3 z-10 h-10 w-10 shadow-md"
+                    title="Move map to my location"
+                    aria-label="Move map to my location"
+                    onClick={handleGoToMyLocation}
+                  >
+                    <Locate className="w-5 h-5" />
+                  </Button>
+                )}
+              </div>
               <details>
                 <summary className="text-sm cursor-pointer text-muted-foreground hover:text-foreground">
                   Addresses ({parsedExfo.terminals.length})

@@ -142,13 +142,14 @@
       lt.classList.toggle('collapsed',!hidden);
     });
   }
-  var USER_LOC={marker:null,circle:null,watchId:null,panned:false};
+  var USER_LOC={marker:null,circle:null,watchId:null,pos:null};
   function startUserLoc(){
     var s=document.getElementById('locStatus');
     if(!navigator.geolocation){if(s){s.textContent='Geolocation not supported by this browser.';s.style.color='#b71c1c';}return;}
     if(!MAP||USER_LOC.watchId!=null)return;
     USER_LOC.watchId=navigator.geolocation.watchPosition(function(p){
       var pos=new google.maps.LatLng(p.coords.latitude,p.coords.longitude);
+      USER_LOC.pos=pos;
       if(!USER_LOC.marker){
         USER_LOC.marker=new google.maps.Marker({map:MAP,position:pos,title:'Your location',icon:{path:google.maps.SymbolPath.CIRCLE,scale:7,fillColor:'#4285F4',fillOpacity:1,strokeColor:'#ffffff',strokeWeight:2},zIndex:10000000});
         USER_LOC.circle=new google.maps.Circle({map:MAP,center:pos,radius:p.coords.accuracy,fillColor:'#4285F4',fillOpacity:0.12,strokeColor:'#4285F4',strokeOpacity:0.35,strokeWeight:1,clickable:false});
@@ -156,9 +157,6 @@
         USER_LOC.marker.setPosition(pos);
         USER_LOC.circle.setCenter(pos);USER_LOC.circle.setRadius(p.coords.accuracy);
       }
-      // Always pan on first fix so the blue dot is actually visible even
-      // if the user is far from the terminal fitBounds view.
-      if(!USER_LOC.panned){USER_LOC.panned=true;MAP.panTo(pos);}
       if(s){s.textContent='';}
     },function(err){
       if(s){s.textContent=(err&&err.message)||'Could not read GPS location.';s.style.color='#b71c1c';}
@@ -171,7 +169,31 @@
     USER_LOC.watchId=null;
     if(USER_LOC.marker){USER_LOC.marker.setMap(null);USER_LOC.marker=null;}
     if(USER_LOC.circle){USER_LOC.circle.setMap(null);USER_LOC.circle=null;}
-    USER_LOC.panned=false;
+  }
+  function goToMyLocation(){
+    var s=document.getElementById('locStatus');
+    var t=document.getElementById('locToggle');
+    if(t&&!t.checked)t.checked=true;
+    if(!USER_LOC.watchId)startUserLoc();
+    if(USER_LOC.pos){MAP.panTo(USER_LOC.pos);return;}
+    if(!navigator.geolocation){if(s){s.textContent='Geolocation not supported by this browser.';s.style.color='#b71c1c';}return;}
+    navigator.geolocation.getCurrentPosition(function(p){
+      var pos=new google.maps.LatLng(p.coords.latitude,p.coords.longitude);
+      USER_LOC.pos=pos;
+      MAP.panTo(pos);
+    },function(err){
+      if(s){s.textContent=(err&&err.message)||'Could not read GPS location.';s.style.color='#b71c1c';}
+    },{enableHighAccuracy:true,maximumAge:5000,timeout:20000});
+  }
+  function wireLocateControl(){
+    var btn=document.createElement('button');
+    btn.type='button';
+    btn.title='My location';
+    btn.setAttribute('aria-label','Move map to my location');
+    btn.style.cssText='margin:0 10px 10px 0;width:40px;height:40px;padding:0;border:0;border-radius:2px;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.3);cursor:pointer;display:flex;align-items:center;justify-content:center;';
+    btn.innerHTML='<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1a73e8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/></svg>';
+    btn.addEventListener('click',goToMyLocation);
+    MAP.controls[google.maps.ControlPosition.RIGHT_BOTTOM].push(btn);
   }
   function wireLocToggle(){
     var t=document.getElementById('locToggle');
@@ -193,6 +215,7 @@
     var center=PFP?{lat:PFP.lat,lng:PFP.lng}:(TERMS[0]?{lat:TERMS[0].lat,lng:TERMS[0].lng}:{lat:0,lng:0});
     MAP=new google.maps.Map(document.getElementById('map'),{zoom:12,center:center});
     wireLocToggle();
+    wireLocateControl();
     var bounds=new google.maps.LatLngBounds();
     if(PFP){var pm=new google.maps.Marker({map:MAP,position:{lat:PFP.lat,lng:PFP.lng},icon:pfpIcon(),title:PFP.name+'\n'+PFP.addr,zIndex:999999});bounds.extend(pm.getPosition());var pinfo=new google.maps.InfoWindow({content:'<b>PFP (starting point)</b><br>'+PFP.name+'<br>'+PFP.addr});pm.addListener('click',function(){pinfo.open({anchor:pm,map:MAP});});}
     var TERM_MARKERS=[];

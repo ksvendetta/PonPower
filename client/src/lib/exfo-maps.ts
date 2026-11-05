@@ -332,7 +332,7 @@ export interface UserLocationState {
   marker?: any;
   accuracyCircle?: any;
   watchId?: number;
-  panned?: boolean;
+  position?: { lat: number; lng: number };
 }
 
 export function startUserLocation(
@@ -379,13 +379,7 @@ export function startUserLocation(
       state.accuracyCircle?.setCenter(pos);
       state.accuracyCircle?.setRadius(accuracy);
     }
-    // Pan to the user only on the first successful fix — don't yank the
-    // viewport on every update. Always pans so the blue dot is visible
-    // even when the user is far from the terminal fitBounds view.
-    if (!state.panned) {
-      state.panned = true;
-      gmap.panTo(pos);
-    }
+    state.position = { lat, lng };
   };
 
   state.watchId = navigator.geolocation.watchPosition(
@@ -402,7 +396,32 @@ export function stopUserLocation(state: UserLocationState): void {
   state.watchId = undefined;
   if (state.marker) { state.marker.setMap(null); state.marker = undefined; }
   if (state.accuracyCircle) { state.accuracyCircle.setMap(null); state.accuracyCircle = undefined; }
-  state.panned = false;
+}
+
+/** Move the camera to the user. Does not run on its own when the map opens. */
+export function panToUserLocation(
+  gmap: any,
+  state: UserLocationState,
+  onError?: (msg: string) => void,
+): void {
+  if (!gmap) return;
+  if (state.position) {
+    gmap.panTo(state.position);
+    return;
+  }
+  if (typeof navigator === "undefined" || !navigator.geolocation) {
+    onError?.("Geolocation is not supported by this browser.");
+    return;
+  }
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      const next = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      state.position = next;
+      gmap.panTo(next);
+    },
+    (err) => onError?.(err.message || "Could not read GPS location."),
+    { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 },
+  );
 }
 
 export function geocodeAllBiased(geocoder: any, query: string, bounds: any): Promise<GeocodeHit[]> {
@@ -811,9 +830,9 @@ export function buildOpenInNewTabHtml(
   let MAP=null;const LINES=[];function clearLines(){for(const l of LINES)l.setMap(null);LINES.length=0;}
   function drawLines(){clearLines();if(!MAP)return;const ord=TERMS.slice().sort((a,b)=>a.minStrand-b.minStrand);let prev=null;for(const t of ord){const pos=new google.maps.LatLng(t.lat,t.lng);if(prev){LINES.push(new google.maps.Polyline({path:[prev,pos],geodesic:true,strokeColor:'#ff6f00',strokeOpacity:0.9,strokeWeight:3,icons:[{icon:{path:google.maps.SymbolPath.FORWARD_CLOSED_ARROW,scale:4,strokeColor:'#ff6f00',fillColor:'#ff6f00',fillOpacity:1},offset:'92%'}],map:MAP}));}prev=pos;}}
   var USER_LOC={marker:null,circle:null,watchId:null,panned:false};
-  function startUserLoc(panOnFirstFix){var s=document.getElementById('locStatus');if(!navigator.geolocation){if(s){s.textContent='Geolocation not supported by this browser.';s.style.color='#b71c1c';}return;}if(!MAP||USER_LOC.watchId!=null)return;USER_LOC.watchId=navigator.geolocation.watchPosition(function(p){var pos=new google.maps.LatLng(p.coords.latitude,p.coords.longitude);if(!USER_LOC.marker){USER_LOC.marker=new google.maps.Marker({map:MAP,position:pos,title:'Your location',icon:{path:google.maps.SymbolPath.CIRCLE,scale:7,fillColor:'#4285F4',fillOpacity:1,strokeColor:'#ffffff',strokeWeight:2},zIndex:10000000});USER_LOC.circle=new google.maps.Circle({map:MAP,center:pos,radius:p.coords.accuracy,fillColor:'#4285F4',fillOpacity:0.12,strokeColor:'#4285F4',strokeOpacity:0.35,strokeWeight:1,clickable:false});}else{USER_LOC.marker.setPosition(pos);USER_LOC.circle.setCenter(pos);USER_LOC.circle.setRadius(p.coords.accuracy);}if(!USER_LOC.panned){USER_LOC.panned=true;if(panOnFirstFix)MAP.panTo(pos);}if(s){s.textContent='';}},function(err){if(s){s.textContent=(err&&err.message)||'Could not read GPS location.';s.style.color='#b71c1c';}var t=document.getElementById('locToggle');if(t)t.checked=false;stopUserLoc();},{enableHighAccuracy:true,maximumAge:10000,timeout:20000});}
+  function startUserLoc(panOnFirstFix){var s=document.getElementById('locStatus');if(!navigator.geolocation){if(s){s.textContent='Geolocation not supported by this browser.';s.style.color='#b71c1c';}return;}if(!MAP||USER_LOC.watchId!=null)return;USER_LOC.watchId=navigator.geolocation.watchPosition(function(p){var pos=new google.maps.LatLng(p.coords.latitude,p.coords.longitude);if(!USER_LOC.marker){USER_LOC.marker=new google.maps.Marker({map:MAP,position:pos,title:'Your location',icon:{path:google.maps.SymbolPath.CIRCLE,scale:7,fillColor:'#4285F4',fillOpacity:1,strokeColor:'#ffffff',strokeWeight:2},zIndex:10000000});USER_LOC.circle=new google.maps.Circle({map:MAP,center:pos,radius:p.coords.accuracy,fillColor:'#4285F4',fillOpacity:0.12,strokeColor:'#4285F4',strokeOpacity:0.35,strokeWeight:1,clickable:false});}else{USER_LOC.marker.setPosition(pos);USER_LOC.circle.setCenter(pos);USER_LOC.circle.setRadius(p.coords.accuracy);}USER_LOC.pos=pos;if(s){s.textContent='';}},function(err){if(s){s.textContent=(err&&err.message)||'Could not read GPS location.';s.style.color='#b71c1c';}var t=document.getElementById('locToggle');if(t)t.checked=false;stopUserLoc();},{enableHighAccuracy:true,maximumAge:10000,timeout:20000});}
   function stopUserLoc(){if(USER_LOC.watchId!=null&&navigator.geolocation){navigator.geolocation.clearWatch(USER_LOC.watchId);}USER_LOC.watchId=null;if(USER_LOC.marker){USER_LOC.marker.setMap(null);USER_LOC.marker=null;}if(USER_LOC.circle){USER_LOC.circle.setMap(null);USER_LOC.circle=null;}USER_LOC.panned=false;}
-  function wireLocToggle(){var t=document.getElementById('locToggle');if(!t)return;t.addEventListener('change',function(){if(t.checked)startUserLoc(true);else stopUserLoc();});if(t.checked)startUserLoc(false);}
+  function wireLocToggle(){var t=document.getElementById('locToggle');if(!t)return;t.addEventListener('change',function(){if(t.checked)startUserLoc(false);else stopUserLoc();});if(t.checked)startUserLoc(false);}
   function initMap(){var lt=document.getElementById('legendToggle');var lc=document.getElementById('legendCodes');if(lt&&lc){lt.addEventListener('click',function(){var h=lc.style.display==='none';lc.style.display=h?'':'none';lt.classList.toggle('collapsed',!h);});}const center=PFP?{lat:PFP.lat,lng:PFP.lng}:{lat:TERMS[0].lat,lng:TERMS[0].lng};MAP=new google.maps.Map(document.getElementById('map'),{zoom:12,center});wireLocToggle();const bounds=new google.maps.LatLngBounds();if(PFP){const m=new google.maps.Marker({map:MAP,position:{lat:PFP.lat,lng:PFP.lng},icon:pfpIcon(),title:PFP.name+'\\n'+PFP.addr,zIndex:999999});bounds.extend(m.getPosition());const info=new google.maps.InfoWindow({content:'<b>PFP (starting point)</b><br>'+PFP.name+'<br>'+PFP.addr});m.addListener('click',()=>info.open({anchor:m,map:MAP}));}var TERM_MARKERS=[];for(const t of TERMS){const m=new google.maps.Marker({map:MAP,position:{lat:t.lat,lng:t.lng},icon:terminalIcon(t.strands,t.port),title:t.name});m._strandNums=Array.isArray(t.strandNums)?t.strandNums:[];TERM_MARKERS.push(m);bounds.extend(m.getPosition());const info=new google.maps.InfoWindow({content:'<b>'+t.name+'</b><br>'+t.addr+'<br>Strands: '+t.strands+(t.port!=null?'<br>Test Port: '+t.port:'')+(t.waldo?'<br>Waldo: '+t.waldo:'')+(t.dist?'<br>Distance from PFP: '+t.dist:'')});m.addListener('click',()=>info.open({anchor:m,map:MAP}));}MAP.fitBounds(bounds,40);const tg=document.getElementById('connToggle');tg.addEventListener('change',()=>{if(tg.checked)drawLines();else clearLines();});if(tg.checked)drawLines();var sI=document.getElementById('ponSearch'),sB=document.getElementById('ponSearchBtn'),sS=document.getElementById('ponSearchStatus');function flashPon(){var raw=(sI.value||'').trim();if(!raw)return;var n=parseInt(raw,10);if(isNaN(n)){sS.textContent='Enter a numeric Pon count.';sS.style.color='#b71c1c';return;}var matches=TERM_MARKERS.filter(function(mk){return mk._strandNums&&mk._strandNums.indexOf(n)!==-1;});if(!matches.length){sS.textContent='No terminal contains Pon count '+n+'.';sS.style.color='#b71c1c';return;}MAP.panTo(matches[0].getPosition());matches.forEach(function(mk){mk.setAnimation(google.maps.Animation.BOUNCE);});setTimeout(function(){matches.forEach(function(mk){mk.setAnimation(null);});},3000);sS.textContent='Flashing '+matches.length+' terminal'+(matches.length>1?'s':'')+' with Pon count '+n+'.';sS.style.color='#1b5e20';}sB.addEventListener('click',flashPon);sI.addEventListener('keydown',function(e){if(e.key==='Enter')flashPon();});}
   window.gm_authFailure=function(){document.body.insertAdjacentHTML('afterbegin','<div style="padding:12px;background:#ffebee;color:#b71c1c;font:13px sans-serif;">Google Maps rejected the API key.</div>');};
 <\/script>
