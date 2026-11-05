@@ -16,12 +16,6 @@ function formatCreated(iso: string): string {
   });
 }
 
-function launchMap(id: string) {
-  const url = `/map.html?id=${encodeURIComponent(id)}`;
-  const opened = window.open(url, "_blank", "noopener,noreferrer");
-  if (!opened) window.location.assign(url);
-}
-
 export function ActiveMapsButton() {
   const [open, setOpen] = useState(false);
   const [maps, setMaps] = useState<ActiveMap[] | null>(null);
@@ -77,18 +71,17 @@ export function ActiveMapsButton() {
             <p className="px-3 py-4 text-sm text-muted-foreground">No active terminal maps.</p>
           )}
           {maps?.map((map) => (
-            <button
+            <a
               key={map.id}
-              type="button"
-              className="w-full rounded-md px-3 py-2 text-left hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              onClick={() => {
-                setOpen(false);
-                launchMap(map.id);
-              }}
+              href={`/map.html?id=${encodeURIComponent(map.id)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block w-full rounded-md px-3 py-2 text-left hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              onClick={() => setOpen(false)}
             >
               <span className="block text-sm font-medium leading-tight break-words">{map.project}</span>
               <span className="mt-0.5 block text-xs text-muted-foreground">{formatCreated(map.createdAt)}</span>
-            </button>
+            </a>
           ))}
         </div>
       </PopoverContent>
